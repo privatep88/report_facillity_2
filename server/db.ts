@@ -1,0 +1,1752 @@
+import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import type {
+  ApprovalRecord,
+  AuditLogEntry,
+  AuthUser,
+  ContractLicenseGroup,
+  LogisticsChannelItem,
+  MaintenanceCategory,
+  MaintenanceCostEntry,
+  MaintenanceSite,
+  MonthlyReportFull,
+  PerformanceThresholds,
+  ReportListSummary,
+  ReportStatus,
+  ReportVersionSummary,
+  SafetyMetricGroup,
+  SecurityReceptionItem,
+  ServiceMetricItem,
+  TaskStatus,
+  UserRole,
+} from '../src/types/report.ts';
+import { DEFAULT_THRESHOLDS, REPORT_STATUSES, TASK_STATUSES, USER_ROLES } from '../src/types/report.ts';
+import {
+  formatDateWestern,
+  normalizeDigits,
+  parseDisplayDateDDMMYYYY,
+  syncReceptionServiceWithSecurity,
+} from '../src/utils/calculations.ts';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const DB_PATH = path.join(DATA_DIR, 'saaed_fm.db');
+export const db = new DatabaseSync(DB_PATH);
+
+db.exec('PRAGMA journal_mode = WAL;');
+db.exec('PRAGMA foreign_keys = ON;');
+
+const SESSION_SECRET = process.env.SESSION_SECRET || 'saaed-fm-exec-secret-2027-key-rotate';
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password: string, stored: string): boolean {
+  const parts = stored.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, hashHex] = parts;
+  const derived = crypto.scryptSync(password, salt, 64);
+  const storedBuf = Buffer.from(hashHex, 'hex');
+  if (derived.length !== storedBuf.length) return false;
+  return crypto.timingSafeEqual(derived, storedBuf);
+}
+
+export function signToken(payload: Record<string, unknown>): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+export function verifyToken(token: string): Record<string, unknown> | null {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('base64url');
+  if (sig.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (typeof parsed.exp === 'number' && Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function createSignatureToken(userId: string, reportId: string, versionNumber: number, action: string): string {
+  const timestamp = new Date().toISOString();
+  const digest = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(`${userId}|${reportId}|v${versionNumber}|${action}|${timestamp}`)
+    .digest('hex')
+    .slice(0, 24)
+    .toUpperCase();
+  return `SIG-${digest}`;
+}
+
+export const DEFAULT_SERVICES: Array<{
+  serviceId: string;
+  sortOrder: number;
+  summaryOrder: number;
+  nameAr: string;
+  nameEn: string;
+}> = [
+  { serviceId: 'svc_reception', sortOrder: 1, summaryOrder: 4, nameAr: 'خدمات الاستقبال', nameEn: 'Reception Services' },
+  { serviceId: 'svc_hospitality', sortOrder: 2, summaryOrder: 7, nameAr: 'طلبات الضيافة', nameEn: 'Hospitality Requests' },
+  { serviceId: 'svc_maintenance', sortOrder: 3, summaryOrder: 1, nameAr: 'طلبات الصيانة', nameEn: 'Maintenance Requests' },
+  { serviceId: 'svc_logistics', sortOrder: 4, summaryOrder: 3, nameAr: 'طلبات الدعم اللوجستي', nameEn: 'Logistics Support Requests' },
+  { serviceId: 'svc_cleaning', sortOrder: 5, summaryOrder: 8, nameAr: 'طلبات النظافة', nameEn: 'Cleaning Requests' },
+  { serviceId: 'svc_waste', sortOrder: 6, summaryOrder: 9, nameAr: 'طلبات إدارة النفايات', nameEn: 'Waste Management Requests' },
+  { serviceId: 'svc_assets', sortOrder: 7, summaryOrder: 6, nameAr: 'طلبات حركات الأصول', nameEn: 'Asset Movement Requests' },
+  { serviceId: 'svc_petty_cash', sortOrder: 8, summaryOrder: 2, nameAr: 'النثرية Petty Cash', nameEn: 'Petty Cash' },
+  { serviceId: 'svc_disbursement', sortOrder: 9, summaryOrder: 5, nameAr: 'طلبات صرف', nameEn: 'Disbursement Requests' },
+  { serviceId: 'svc_government', sortOrder: 10, summaryOrder: 10, nameAr: 'طلبات وخدمات حكومية', nameEn: 'Government Services & Requests' },
+  { serviceId: 'svc_access_permit', sortOrder: 11, summaryOrder: 11, nameAr: 'طلبات تصريح أو إلغاء دخول', nameEn: 'Access Permit / Cancellation' },
+];
+
+export const DEFAULT_LOGISTICS_CHANNELS: Array<{
+  channelKey: string;
+  nameAr: string;
+  nameEn: string;
+  sortOrder: number;
+}> = [
+  { channelKey: 'courier', nameAr: 'المندوب', nameEn: 'Courier', sortOrder: 1 },
+  { channelKey: 'emirates_post', nameAr: 'بريد الإمارات', nameEn: 'Emirates Post', sortOrder: 2 },
+  { channelKey: 'aramex', nameAr: 'أرامكس', nameEn: 'Aramex', sortOrder: 3 },
+  { channelKey: 'tawzea', nameAr: 'توزيع', nameEn: 'Tawzea', sortOrder: 4 },
+  { channelKey: 'other', nameAr: 'أخرى', nameEn: 'Other', sortOrder: 5 },
+];
+
+export const DEFAULT_SECURITY_ACTIVITIES: Array<{
+  activityKey: string;
+  nameAr: string;
+  nameEn: string;
+  sortOrder: number;
+}> = [
+  { activityKey: 'card_activation', nameAr: 'تفعيل البطاقات', nameEn: 'Card Activation', sortOrder: 1 },
+  { activityKey: 'visitors', nameAr: 'عدد الزوار', nameEn: 'Visitors Count', sortOrder: 2 },
+  { activityKey: 'vendor_visitors', nameAr: 'زوار الموردين', nameEn: 'Vendor Visitors', sortOrder: 3 },
+  { activityKey: 'hall_booking', nameAr: 'حجز القاعات', nameEn: 'Meeting Room Bookings', sortOrder: 4 },
+  { activityKey: 'evacuation', nameAr: 'حالات الإخلاء', nameEn: 'Evacuation Drills/Incidents', sortOrder: 5 },
+  { activityKey: 'security_reports', nameAr: 'تقارير أمنية', nameEn: 'Security Reports', sortOrder: 6 },
+  { activityKey: 'emergencies', nameAr: 'حالات طارئة', nameEn: 'Emergency Cases', sortOrder: 7 },
+];
+
+export function initSchemaAndSeed(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS roles (
+      key TEXT PRIMARY KEY,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      permissions_json TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      full_name TEXT NOT NULL,
+      job_title TEXT NOT NULL,
+      role_key TEXT NOT NULL REFERENCES roles(key),
+      password_hash TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reporting_periods (
+      id TEXT PRIMARY KEY,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      department TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(year, month, department)
+    );
+
+    CREATE TABLE IF NOT EXISTS monthly_reports (
+      id TEXT PRIMARY KEY,
+      period_id TEXT NOT NULL REFERENCES reporting_periods(id),
+      report_number TEXT NOT NULL UNIQUE,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      department TEXT NOT NULL,
+      company TEXT NOT NULL,
+      classification TEXT NOT NULL DEFAULT 'Public',
+      status TEXT NOT NULL DEFAULT 'draft',
+      current_version INTEGER NOT NULL DEFAULT 1,
+      preparer_id TEXT,
+      preparer_name TEXT NOT NULL DEFAULT '',
+      preparer_title TEXT NOT NULL DEFAULT '',
+      prepared_at TEXT,
+      preparer_signature_hash TEXT,
+      preparer_signature_image TEXT,
+      reviewer_id TEXT,
+      reviewer_name TEXT NOT NULL DEFAULT '',
+      reviewer_title TEXT NOT NULL DEFAULT '',
+      reviewed_at TEXT,
+      approver_id TEXT,
+      approver_name TEXT NOT NULL DEFAULT '',
+      approver_title TEXT NOT NULL DEFAULT '',
+      approved_at TEXT,
+      approver_signature_hash TEXT,
+      approver_signature_image TEXT,
+      maint_from_facilities INTEGER NOT NULL DEFAULT 0,
+      maint_from_other INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS service_metrics (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      service_id TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      summary_order INTEGER NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      received_count INTEGER NOT NULL DEFAULT 0,
+      executed_count INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(report_id, service_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS maintenance_sites (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS maintenance_categories (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS maintenance_records (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      site_id TEXT NOT NULL REFERENCES maintenance_sites(id),
+      category_id TEXT NOT NULL REFERENCES maintenance_categories(id),
+      fault_count INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(report_id, site_id, category_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS maintenance_costs (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      category_id TEXT NOT NULL REFERENCES maintenance_categories(id),
+      petty_cash_aed REAL NOT NULL DEFAULT 0,
+      purchase_order_aed REAL NOT NULL DEFAULT 0,
+      UNIQUE(report_id, category_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS contracts_licenses (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      group_key TEXT NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      active_count INTEGER NOT NULL DEFAULT 0,
+      inactive_count INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      UNIQUE(report_id, group_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS safety_metrics (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      group_key TEXT NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      primary_label_ar TEXT NOT NULL,
+      primary_label_en TEXT NOT NULL,
+      secondary_label_ar TEXT NOT NULL,
+      secondary_label_en TEXT NOT NULL,
+      primary_count INTEGER NOT NULL DEFAULT 0,
+      secondary_count INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      UNIQUE(report_id, group_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS logistics_metrics (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      channel_key TEXT NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL,
+      UNIQUE(report_id, channel_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS reception_metrics (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      activity_key TEXT NOT NULL,
+      name_ar TEXT NOT NULL,
+      name_en TEXT NOT NULL,
+      received_count INTEGER NOT NULL DEFAULT 0,
+      executed_count INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL,
+      UNIQUE(report_id, activity_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      row_order INTEGER NOT NULL,
+      topic TEXT NOT NULL DEFAULT '',
+      task_name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'not_started',
+      completion_pct INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS challenges (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      row_order INTEGER NOT NULL,
+      challenge_text TEXT NOT NULL DEFAULT '',
+      update_text TEXT NOT NULL DEFAULT '',
+      recommendation_text TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS approval_records (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      version_number INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      from_status TEXT NOT NULL,
+      to_status TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      actor_name TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      signature_token TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS report_versions (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES monthly_reports(id) ON DELETE CASCADE,
+      version_number INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      approved_by_id TEXT NOT NULL,
+      approved_by_name TEXT NOT NULL,
+      signature_token TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(report_id, version_number)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      user_role TEXT NOT NULL,
+      action TEXT NOT NULL,
+      field_path TEXT NOT NULL,
+      previous_value TEXT NOT NULL DEFAULT '',
+      new_value TEXT NOT NULL DEFAULT '',
+      reason TEXT NOT NULL DEFAULT '',
+      version_number INTEGER NOT NULL DEFAULT 1,
+      report_status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  // Ensure new signature image columns exist on already-initialized databases
+  const reportCols = db.prepare('PRAGMA table_info(monthly_reports)').all() as Array<{ name: string }>;
+  const colNames = new Set(reportCols.map((c) => c.name));
+  if (!colNames.has('preparer_signature_image')) {
+    db.exec('ALTER TABLE monthly_reports ADD COLUMN preparer_signature_image TEXT;');
+  }
+  if (!colNames.has('approver_signature_image')) {
+    db.exec('ALTER TABLE monthly_reports ADD COLUMN approver_signature_image TEXT;');
+  }
+
+  const now = new Date().toISOString();
+
+  // Seed roles
+  const rolesCount = db.prepare('SELECT COUNT(*) as cnt FROM roles').get() as { cnt: number };
+  if (rolesCount.cnt === 0) {
+    const insertRole = db.prepare('INSERT INTO roles (key, name_ar, name_en, permissions_json) VALUES (?, ?, ?, ?)');
+    insertRole.run(USER_ROLES.ADMIN, 'مدير النظام', 'System Administrator', JSON.stringify(['*']));
+    insertRole.run(USER_ROLES.PREPARER, 'معد التقرير', 'Report Preparer', JSON.stringify(['create_report', 'edit_draft', 'submit_review']));
+    insertRole.run(USER_ROLES.REVIEWER, 'المراجع', 'Reviewer', JSON.stringify(['start_review', 'return_report', 'forward_approval']));
+    insertRole.run(USER_ROLES.APPROVER, 'المعتمد', 'Approver', JSON.stringify(['approve_report', 'archive_report', 'return_report']));
+    insertRole.run(USER_ROLES.VIEWER, 'مستخدم للعرض فقط', 'Read-Only Viewer', JSON.stringify(['read_only']));
+  }
+
+  // Seed users
+  const usersCount = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
+  if (usersCount.cnt === 0) {
+    const defaultPwdHash = hashPassword('Saaed@2027');
+    const insertUser = db.prepare(
+      'INSERT INTO users (id, email, full_name, job_title, role_key, password_hash, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+    );
+    insertUser.run('usr_admin', 'mr.aljefre@gmail.com', 'خالد الهاشمي', 'مدير النظام التنفيذي', USER_ROLES.ADMIN, defaultPwdHash, now);
+    insertUser.run('usr_preparer', 'muath.almasabi@saaed.ae', 'معاذ المصعبي', 'ضابط أول المرافق والأصول', USER_ROLES.PREPARER, defaultPwdHash, now);
+    insertUser.run('usr_reviewer', 'reviewer@saaed.ae', 'سالم المنصوري', 'مراجع عمليات المرافق', USER_ROLES.REVIEWER, defaultPwdHash, now);
+    insertUser.run('usr_approver', 'faisal.alsulaimani@saaed.ae', 'فيصل سويد السليماني', 'رئيس قسم إدارة المرافق', USER_ROLES.APPROVER, defaultPwdHash, now);
+    insertUser.run('usr_viewer', 'viewer@saaed.ae', 'الإدارة العليا (عرض)', 'عضو اللجنة التنفيذية', USER_ROLES.VIEWER, defaultPwdHash, now);
+  }
+
+  // Seed thresholds setting
+  const thresholdRow = db.prepare("SELECT key FROM system_settings WHERE key = 'kpi_thresholds'").get();
+  if (!thresholdRow) {
+    db.prepare('INSERT INTO system_settings (key, value_json, updated_at) VALUES (?, ?, ?)').run(
+      'kpi_thresholds',
+      JSON.stringify(DEFAULT_THRESHOLDS),
+      now
+    );
+  }
+
+  // Seed original 5 Maintenance Sites
+  const sitesCount = db.prepare('SELECT COUNT(*) as cnt FROM maintenance_sites').get() as { cnt: number };
+  if (sitesCount.cnt === 0) {
+    const insertSite = db.prepare(
+      'INSERT INTO maintenance_sites (id, code, name_ar, name_en, is_active, sort_order, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)'
+    );
+    insertSite.run('site_injazat', 'INJAZAT', 'مقر إنجازات', 'Injazat HQ', 1, now);
+    insertSite.run('site_patrols', 'PATROLS', 'مقر الدوريات', 'Patrols HQ', 2, now);
+    insertSite.run('site_ibn_battuta', 'IBN_BATTUTA', 'مقر ابن بطوطة', 'Ibn Battuta HQ', 3, now);
+    insertSite.run('site_ajman_eval', 'AJMAN_EVAL', 'مقر تقييم عجمان', 'Ajman Evaluation HQ', 4, now);
+    insertSite.run('site_ajman_patrols', 'AJMAN_PATROLS', 'مقر دوريات عجمان', 'Ajman Patrols HQ', 5, now);
+  }
+
+  // Seed original 12 Maintenance Categories
+  const catsCount = db.prepare('SELECT COUNT(*) as cnt FROM maintenance_categories').get() as { cnt: number };
+  if (catsCount.cnt === 0) {
+    const insertCat = db.prepare(
+      'INSERT INTO maintenance_categories (id, code, name_ar, name_en, is_active, sort_order, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)'
+    );
+    const cats: Array<[string, string, string, string]> = [
+      ['cat_general', 'GENERAL', 'أعطال عامة', 'General Faults'],
+      ['cat_furniture', 'FURNITURE', 'أثاث', 'Furniture'],
+      ['cat_decor', 'DECOR', 'أعمال ديكور', 'Decor Works'],
+      ['cat_fire_alarm', 'FIRE_ALARM', 'إنذار حريق', 'Fire Alarm'],
+      ['cat_water_leak', 'WATER_LEAK', 'تسريب ماء', 'Water Leak'],
+      ['cat_doors', 'DOORS', 'عطل أبواب', 'Door Faults'],
+      ['cat_lighting', 'LIGHTING', 'عطل إنارة', 'Lighting Faults'],
+      ['cat_flooring', 'FLOORING', 'عطل أرضيات', 'Flooring Faults'],
+      ['cat_hvac', 'HVAC', 'عطل تكييف', 'HVAC Faults'],
+      ['cat_signage', 'SIGNAGE', 'عطل لوحات خارجية', 'External Signage'],
+      ['cat_electrical', 'ELECTRICAL', 'عطل كهرباء', 'Electrical Faults'],
+      ['cat_elevators', 'ELEVATORS', 'عطل مصاعد', 'Elevator Faults'],
+    ];
+    cats.forEach(([id, code, ar, en], idx) => insertCat.run(id, code, ar, en, idx + 1, now));
+  }
+
+  // Seed Reference Month Report (January 2027 from attached PDF)
+  const reportsCount = db.prepare('SELECT COUNT(*) as cnt FROM monthly_reports').get() as { cnt: number };
+  if (reportsCount.cnt === 0) {
+    seedReferenceJan2027Report();
+  }
+}
+
+function seedReferenceJan2027Report(): void {
+  const now = new Date().toISOString();
+  const periodId = 'period_2027_01_general';
+  const reportId = 'rep_2027_01_001';
+  const dept = 'إدارة الخدمات العامة';
+  const reportNumber = 'FM-2027-01-001';
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('INSERT INTO reporting_periods (id, year, month, department, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      periodId,
+      2027,
+      1,
+      dept,
+      now
+    );
+
+    db.prepare(
+      `INSERT INTO monthly_reports (
+        id, period_id, report_number, year, month, department, company, classification,
+        status, current_version,
+        preparer_id, preparer_name, preparer_title, prepared_at, preparer_signature_hash,
+        reviewer_id, reviewer_name, reviewer_title, reviewed_at,
+        approver_id, approver_name, approver_title, approved_at, approver_signature_hash,
+        maint_from_facilities, maint_from_other, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      reportId,
+      periodId,
+      reportNumber,
+      2027,
+      1,
+      dept,
+      'ساعد للأنظمة المرورية — SAAED',
+      'Public',
+      REPORT_STATUSES.DRAFT,
+      1,
+      'usr_preparer',
+      'معاذ المصعبي',
+      'ضابط أول المرافق والأصول',
+      null,
+      null,
+      null,
+      '',
+      '',
+      null,
+      'usr_approver',
+      'فيصل سويد السليماني',
+      'رئيس قسم إدارة المرافق',
+      null,
+      null,
+      0,
+      0,
+      now,
+      now
+    );
+
+    // 11 Services (all 0 in Jan 2027 PDF)
+    const insSvc = db.prepare(
+      'INSERT INTO service_metrics (id, report_id, service_id, sort_order, summary_order, name_ar, name_en, received_count, executed_count) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)'
+    );
+    for (const s of DEFAULT_SERVICES) {
+      insSvc.run(`${reportId}_${s.serviceId}`, reportId, s.serviceId, s.sortOrder, s.summaryOrder, s.nameAr, s.nameEn);
+    }
+
+    // Contracts & Licenses (Exact Jan 2027 PDF numbers: 5 Rental, 5 Commercial, 6 Service)
+    const insCon = db.prepare(
+      'INSERT INTO contracts_licenses (id, report_id, group_key, name_ar, name_en, active_count, inactive_count, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    insCon.run(`${reportId}_rental`, reportId, 'rental_contracts', 'العقود الإيجارية', 'Rental Contracts', 5, 0, '');
+    insCon.run(`${reportId}_commercial`, reportId, 'commercial_licenses', 'الرخص التجارية', 'Commercial Licenses', 5, 0, '');
+    insCon.run(`${reportId}_service`, reportId, 'service_contracts', 'عقود الخدمات', 'Service Contracts', 6, 0, '');
+
+    // Safety (0/0 in Jan 2027 PDF)
+    const insSaf = db.prepare(
+      'INSERT INTO safety_metrics (id, report_id, group_key, name_ar, name_en, primary_label_ar, primary_label_en, secondary_label_ar, secondary_label_en, primary_count, secondary_count, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)'
+    );
+    insSaf.run(
+      `${reportId}_ext`,
+      reportId,
+      'fire_extinguishers',
+      'عدد الطفايات',
+      'Fire Extinguishers',
+      'فعّالة',
+      'Active',
+      'غير فعّالة',
+      'Inactive',
+      ''
+    );
+    insSaf.run(
+      `${reportId}_risk`,
+      reportId,
+      'risk_observations',
+      'عدد ملاحظات المخاطر',
+      'Risk Observations',
+      'مغلقة',
+      'Closed',
+      'غير مغلقة',
+      'Not closed',
+      ''
+    );
+
+    // Maintenance Matrix (Jan 2027 PDF: Injazat Fire Alarm = 1, Ibn Battuta Electrical = 1)
+    const sites = db.prepare('SELECT id FROM maintenance_sites').all() as Array<{ id: string }>;
+    const cats = db.prepare('SELECT id FROM maintenance_categories').all() as Array<{ id: string }>;
+    const insMaint = db.prepare(
+      'INSERT INTO maintenance_records (id, report_id, site_id, category_id, fault_count) VALUES (?, ?, ?, ?, ?)'
+    );
+    for (const site of sites) {
+      for (const cat of cats) {
+        let count = 0;
+        if (site.id === 'site_injazat' && cat.id === 'cat_fire_alarm') count = 1;
+        if (site.id === 'site_ibn_battuta' && cat.id === 'cat_electrical') count = 1;
+        insMaint.run(`${reportId}_${site.id}_${cat.id}`, reportId, site.id, cat.id, count);
+      }
+    }
+
+    const insCost = db.prepare(
+      'INSERT INTO maintenance_costs (id, report_id, category_id, petty_cash_aed, purchase_order_aed) VALUES (?, ?, ?, 0, 0)'
+    );
+    for (const cat of cats) {
+      insCost.run(`${reportId}_cost_${cat.id}`, reportId, cat.id);
+    }
+
+    // Logistics
+    const insLog = db.prepare(
+      'INSERT INTO logistics_metrics (id, report_id, channel_key, name_ar, name_en, request_count, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?)'
+    );
+    for (const ch of DEFAULT_LOGISTICS_CHANNELS) {
+      insLog.run(`${reportId}_${ch.channelKey}`, reportId, ch.channelKey, ch.nameAr, ch.nameEn, ch.sortOrder);
+    }
+
+    // Security & Reception
+    const insRec = db.prepare(
+      'INSERT INTO reception_metrics (id, report_id, activity_key, name_ar, name_en, received_count, executed_count, sort_order) VALUES (?, ?, ?, ?, ?, 0, 0, ?)'
+    );
+    for (const act of DEFAULT_SECURITY_ACTIVITIES) {
+      insRec.run(`${reportId}_${act.activityKey}`, reportId, act.activityKey, act.nameAr, act.nameEn, act.sortOrder);
+    }
+
+    // Tasks: 1 clean initial empty row (not falsely marked completed!)
+    db.prepare(
+      'INSERT INTO tasks (id, report_id, row_order, topic, task_name, status, completion_pct) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(`${reportId}_task_1`, reportId, 1, '', '', TASK_STATUSES.NOT_STARTED, 0);
+
+    // Challenges: Exact Musaffah challenge from Jan 2027 PDF page 3
+    db.prepare(
+      'INSERT INTO challenges (id, report_id, row_order, challenge_text, update_text, recommendation_text) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      `${reportId}_chal_1`,
+      reportId,
+      1,
+      'عدم التمكن من إصدار تراخيص البناء لأرض مصفح',
+      'تم مخاطبة بلدية أبوظبي للحصول على ترخيص البناء في أرض مصفح وتم الرد بأنه تم إيقاف إصدار تراخيص البناء للأرض',
+      'تصعيد الموضوع للبت في حالة الأرض'
+    );
+
+    // Audit Log seed entry
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      reportId,
+      'usr_preparer',
+      'معاذ المصعبي',
+      USER_ROLES.PREPARER,
+      'تهيئة التقرير المرجعي',
+      'monthly_reports',
+      '',
+      reportNumber,
+      'استيراد بيانات التقرير المرجعي لشهر يناير 2027',
+      1,
+      REPORT_STATUSES.DRAFT,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function getThresholds(): PerformanceThresholds {
+  const row = db.prepare("SELECT value_json FROM system_settings WHERE key = 'kpi_thresholds'").get() as
+    | { value_json: string }
+    | undefined;
+  if (!row) return DEFAULT_THRESHOLDS;
+  try {
+    return JSON.parse(row.value_json) as PerformanceThresholds;
+  } catch {
+    return DEFAULT_THRESHOLDS;
+  }
+}
+
+export function getAllSites(): MaintenanceSite[] {
+  const rows = db
+    .prepare('SELECT id, code, name_ar, name_en, is_active, sort_order FROM maintenance_sites ORDER BY sort_order ASC')
+    .all() as Array<{
+    id: string;
+    code: string;
+    name_ar: string;
+    name_en: string;
+    is_active: number;
+    sort_order: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    nameAr: r.name_ar,
+    nameEn: r.name_en,
+    isActive: r.is_active === 1,
+    sortOrder: r.sort_order,
+  }));
+}
+
+export function getAllCategories(): MaintenanceCategory[] {
+  const rows = db
+    .prepare('SELECT id, code, name_ar, name_en, is_active, sort_order FROM maintenance_categories ORDER BY sort_order ASC')
+    .all() as Array<{
+    id: string;
+    code: string;
+    name_ar: string;
+    name_en: string;
+    is_active: number;
+    sort_order: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    nameAr: r.name_ar,
+    nameEn: r.name_en,
+    isActive: r.is_active === 1,
+    sortOrder: r.sort_order,
+  }));
+}
+
+export function getReportById(reportId: string): MonthlyReportFull | null {
+  const r = db.prepare('SELECT * FROM monthly_reports WHERE id = ?').get(reportId) as Record<string, unknown> | undefined;
+  if (!r) return null;
+
+  const services = (
+    db.prepare('SELECT * FROM service_metrics WHERE report_id = ? ORDER BY sort_order ASC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((s) => ({
+    serviceId: String(s.service_id),
+    sortOrder: Number(s.sort_order),
+    summaryOrder: Number(s.summary_order),
+    nameAr: String(s.name_ar),
+    nameEn: String(s.name_en),
+    receivedCount: Number(s.received_count),
+    executedCount: Number(s.executed_count),
+  })) satisfies ServiceMetricItem[];
+
+  const contracts = (
+    db.prepare('SELECT * FROM contracts_licenses WHERE report_id = ?').all(reportId) as Array<Record<string, unknown>>
+  ).map((c) => ({
+    groupKey: String(c.group_key) as ContractLicenseGroup['groupKey'],
+    nameAr: String(c.name_ar),
+    nameEn: String(c.name_en),
+    activeCount: Number(c.active_count),
+    inactiveCount: Number(c.inactive_count),
+    notes: String(c.notes || ''),
+  }));
+
+  const safety = (
+    db.prepare('SELECT * FROM safety_metrics WHERE report_id = ?').all(reportId) as Array<Record<string, unknown>>
+  ).map((s) => ({
+    groupKey: String(s.group_key) as SafetyMetricGroup['groupKey'],
+    nameAr: String(s.name_ar),
+    nameEn: String(s.name_en),
+    primaryLabelAr: String(s.primary_label_ar),
+    primaryLabelEn: String(s.primary_label_en),
+    secondaryLabelAr: String(s.secondary_label_ar),
+    secondaryLabelEn: String(s.secondary_label_en),
+    primaryCount: Number(s.primary_count),
+    secondaryCount: Number(s.secondary_count),
+    notes: String(s.notes || ''),
+  }));
+
+  const maintRows = db
+    .prepare('SELECT site_id, category_id, fault_count FROM maintenance_records WHERE report_id = ?')
+    .all(reportId) as Array<{ site_id: string; category_id: string; fault_count: number }>;
+  const maintenanceMatrix: Record<string, Record<string, number>> = {};
+  for (const row of maintRows) {
+    if (!maintenanceMatrix[row.site_id]) maintenanceMatrix[row.site_id] = {};
+    maintenanceMatrix[row.site_id][row.category_id] = Number(row.fault_count);
+  }
+
+  const costRows = db
+    .prepare('SELECT category_id, petty_cash_aed, purchase_order_aed FROM maintenance_costs WHERE report_id = ?')
+    .all(reportId) as Array<{ category_id: string; petty_cash_aed: number; purchase_order_aed: number }>;
+  const maintenanceCosts: Record<string, MaintenanceCostEntry> = {};
+  for (const row of costRows) {
+    maintenanceCosts[row.category_id] = {
+      categoryId: row.category_id,
+      pettyCashAed: Number(row.petty_cash_aed),
+      purchaseOrderAed: Number(row.purchase_order_aed),
+    };
+  }
+
+  const logistics = (
+    db.prepare('SELECT * FROM logistics_metrics WHERE report_id = ? ORDER BY sort_order ASC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((l) => ({
+    channelKey: String(l.channel_key),
+    nameAr: String(l.name_ar),
+    nameEn: String(l.name_en),
+    requestCount: Number(l.request_count),
+    sortOrder: Number(l.sort_order),
+  })) satisfies LogisticsChannelItem[];
+
+  const securityReception = (
+    db.prepare('SELECT * FROM reception_metrics WHERE report_id = ? ORDER BY sort_order ASC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((sr) => ({
+    activityKey: String(sr.activity_key),
+    nameAr: String(sr.name_ar),
+    nameEn: String(sr.name_en),
+    receivedCount: Number(sr.received_count),
+    executedCount: Number(sr.executed_count),
+    sortOrder: Number(sr.sort_order),
+  })) satisfies SecurityReceptionItem[];
+
+  const tasks = (
+    db.prepare('SELECT * FROM tasks WHERE report_id = ? ORDER BY row_order ASC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((t) => ({
+    id: String(t.id),
+    rowOrder: Number(t.row_order),
+    topic: String(t.topic || ''),
+    taskName: String(t.task_name || ''),
+    status: String(t.status) as TaskStatus,
+    completionPct: Number(t.completion_pct),
+  }));
+
+  const challenges = (
+    db.prepare('SELECT * FROM challenges WHERE report_id = ? ORDER BY row_order ASC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((c) => ({
+    id: String(c.id),
+    rowOrder: Number(c.row_order),
+    challengeText: String(c.challenge_text || ''),
+    updateText: String(c.update_text || ''),
+    recommendationText: String(c.recommendation_text || ''),
+  }));
+
+  const report: MonthlyReportFull = {
+    id: String(r.id),
+    periodId: String(r.period_id),
+    reportNumber: String(r.report_number),
+    year: Number(r.year),
+    month: Number(r.month),
+    department: String(r.department),
+    company: String(r.company),
+    classification: String(r.classification),
+    status: String(r.status) as ReportStatus,
+    currentVersion: Number(r.current_version),
+    preparerId: r.preparer_id ? String(r.preparer_id) : null,
+    preparerName: String(r.preparer_name || ''),
+    preparerTitle: String(r.preparer_title || ''),
+    preparedAt: r.prepared_at ? String(r.prepared_at) : null,
+    preparerSignatureHash: r.preparer_signature_hash ? String(r.preparer_signature_hash) : null,
+    preparerSignatureImage: r.preparer_signature_image ? String(r.preparer_signature_image) : null,
+    reviewerId: r.reviewer_id ? String(r.reviewer_id) : null,
+    reviewerName: String(r.reviewer_name || ''),
+    reviewerTitle: String(r.reviewer_title || ''),
+    reviewedAt: r.reviewed_at ? String(r.reviewed_at) : null,
+    approverId: r.approver_id ? String(r.approver_id) : null,
+    approverName: String(r.approver_name || ''),
+    approverTitle: String(r.approver_title || ''),
+    approvedAt: r.approved_at ? String(r.approved_at) : null,
+    approverSignatureHash: r.approver_signature_hash ? String(r.approver_signature_hash) : null,
+    approverSignatureImage: r.approver_signature_image ? String(r.approver_signature_image) : null,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+    services,
+    contracts,
+    safety,
+    maintenanceMatrix,
+    maintenanceCosts,
+    maintenanceServices: {
+      fromFacilitiesDept: Number(r.maint_from_facilities),
+      fromOtherDepts: Number(r.maint_from_other),
+    },
+    logistics,
+    securityReception,
+    tasks,
+    challenges,
+  };
+
+  return report.status === REPORT_STATUSES.DRAFT ? syncReceptionServiceWithSecurity(report) : report;
+}
+
+export function listReportsSummary(): ReportListSummary[] {
+  const rows = db
+    .prepare(
+      `SELECT r.*,
+        COALESCE((SELECT SUM(received_count) FROM service_metrics WHERE report_id = r.id), 0) AS total_received,
+        COALESCE((SELECT SUM(executed_count) FROM service_metrics WHERE report_id = r.id), 0) AS total_executed,
+        COALESCE((SELECT SUM(fault_count) FROM maintenance_records WHERE report_id = r.id), 0) AS total_faults,
+        COALESCE((SELECT SUM(petty_cash_aed + purchase_order_aed) FROM maintenance_costs WHERE report_id = r.id), 0) AS total_cost_aed,
+        COALESCE((SELECT COUNT(*) FROM report_versions WHERE report_id = r.id), 0) AS version_count
+      FROM monthly_reports r
+      ORDER BY r.year DESC, r.month DESC, r.created_at DESC`
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return rows.map((r) => {
+    const totalReceived = Number(r.total_received) || 0;
+    const totalExecuted = Number(r.total_executed) || 0;
+    const completionRate = totalReceived > 0 ? Math.round((totalExecuted / totalReceived) * 1000) / 10 : null;
+    return {
+      id: String(r.id),
+      reportNumber: String(r.report_number),
+      year: Number(r.year),
+      month: Number(r.month),
+      department: String(r.department),
+      status: String(r.status) as ReportStatus,
+      currentVersion: Number(r.current_version),
+      preparerName: String(r.preparer_name || ''),
+      approverName: String(r.approver_name || ''),
+      preparedAt: r.prepared_at ? String(r.prepared_at) : null,
+      approvedAt: r.approved_at ? String(r.approved_at) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at),
+      totalReceived,
+      totalExecuted,
+      completionRate,
+      totalFaults: Number(r.total_faults) || 0,
+      totalCostAed: Math.round((Number(r.total_cost_aed) || 0) * 100) / 100,
+      versionCount: Number(r.version_count) || 0,
+    };
+  });
+}
+
+export function createBlankMonthlyReport(params: {
+  year: number;
+  month: number;
+  department: string;
+  user: AuthUser;
+}): MonthlyReportFull {
+  const existing = db
+    .prepare('SELECT id FROM reporting_periods WHERE year = ? AND month = ? AND department = ?')
+    .get(params.year, params.month, params.department) as { id: string } | undefined;
+
+  if (existing) {
+    throw new Error('يوجد تقرير مسجل مسبقاً لنفس الشهر والسنة والنطاق الإداري');
+  }
+
+  const now = new Date().toISOString();
+  const periodId = `period_${params.year}_${String(params.month).padStart(2, '0')}_${crypto.randomUUID().slice(0, 6)}`;
+  const reportId = `rep_${params.year}_${String(params.month).padStart(2, '0')}_${crypto.randomUUID().slice(0, 8)}`;
+
+  // Generate unique sequential report number FM-YYYY-MM-NNN
+  const seqRow = db
+    .prepare('SELECT COUNT(*) as cnt FROM monthly_reports WHERE year = ? AND month = ?')
+    .get(params.year, params.month) as { cnt: number };
+  const seq = String(seqRow.cnt + 1).padStart(3, '0');
+  const reportNumber = `FM-${params.year}-${String(params.month).padStart(2, '0')}-${seq}`;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('INSERT INTO reporting_periods (id, year, month, department, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      periodId,
+      params.year,
+      params.month,
+      params.department,
+      now
+    );
+
+    db.prepare(
+      `INSERT INTO monthly_reports (
+        id, period_id, report_number, year, month, department, company, classification,
+        status, current_version,
+        preparer_id, preparer_name, preparer_title,
+        approver_name, approver_title,
+        maint_from_facilities, maint_from_other, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Public', 'draft', 1, ?, ?, ?, '', '', 0, 0, ?, ?)`
+    ).run(
+      reportId,
+      periodId,
+      reportNumber,
+      params.year,
+      params.month,
+      params.department,
+      'ساعد للأنظمة المرورية — SAAED',
+      params.user.id,
+      params.user.fullName,
+      params.user.jobTitle,
+      now,
+      now
+    );
+
+    const insSvc = db.prepare(
+      'INSERT INTO service_metrics (id, report_id, service_id, sort_order, summary_order, name_ar, name_en, received_count, executed_count) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)'
+    );
+    for (const s of DEFAULT_SERVICES) {
+      insSvc.run(`${reportId}_${s.serviceId}`, reportId, s.serviceId, s.sortOrder, s.summaryOrder, s.nameAr, s.nameEn);
+    }
+
+    const insCon = db.prepare(
+      'INSERT INTO contracts_licenses (id, report_id, group_key, name_ar, name_en, active_count, inactive_count, notes) VALUES (?, ?, ?, ?, ?, 0, 0, ?)'
+    );
+    insCon.run(`${reportId}_rental`, reportId, 'rental_contracts', 'العقود الإيجارية', 'Rental Contracts', '');
+    insCon.run(`${reportId}_commercial`, reportId, 'commercial_licenses', 'الرخص التجارية', 'Commercial Licenses', '');
+    insCon.run(`${reportId}_service`, reportId, 'service_contracts', 'عقود الخدمات', 'Service Contracts', '');
+
+    const insSaf = db.prepare(
+      'INSERT INTO safety_metrics (id, report_id, group_key, name_ar, name_en, primary_label_ar, primary_label_en, secondary_label_ar, secondary_label_en, primary_count, secondary_count, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)'
+    );
+    insSaf.run(`${reportId}_ext`, reportId, 'fire_extinguishers', 'عدد الطفايات', 'Fire Extinguishers', 'فعّالة', 'Active', 'غير فعّالة', 'Inactive', '');
+    insSaf.run(`${reportId}_risk`, reportId, 'risk_observations', 'عدد ملاحظات المخاطر', 'Risk Observations', 'مغلقة', 'Closed', 'غير مغلقة', 'Not closed', '');
+
+    const sites = db.prepare('SELECT id FROM maintenance_sites').all() as Array<{ id: string }>;
+    const cats = db.prepare('SELECT id FROM maintenance_categories').all() as Array<{ id: string }>;
+    const insMaint = db.prepare(
+      'INSERT INTO maintenance_records (id, report_id, site_id, category_id, fault_count) VALUES (?, ?, ?, ?, 0)'
+    );
+    for (const site of sites) {
+      for (const cat of cats) {
+        insMaint.run(`${reportId}_${site.id}_${cat.id}`, reportId, site.id, cat.id);
+      }
+    }
+
+    const insCost = db.prepare(
+      'INSERT INTO maintenance_costs (id, report_id, category_id, petty_cash_aed, purchase_order_aed) VALUES (?, ?, ?, 0, 0)'
+    );
+    for (const cat of cats) {
+      insCost.run(`${reportId}_cost_${cat.id}`, reportId, cat.id);
+    }
+
+    const insLog = db.prepare(
+      'INSERT INTO logistics_metrics (id, report_id, channel_key, name_ar, name_en, request_count, sort_order) VALUES (?, ?, ?, ?, ?, 0, ?)'
+    );
+    for (const ch of DEFAULT_LOGISTICS_CHANNELS) {
+      insLog.run(`${reportId}_${ch.channelKey}`, reportId, ch.channelKey, ch.nameAr, ch.nameEn, ch.sortOrder);
+    }
+
+    const insRec = db.prepare(
+      'INSERT INTO reception_metrics (id, report_id, activity_key, name_ar, name_en, received_count, executed_count, sort_order) VALUES (?, ?, ?, ?, ?, 0, 0, ?)'
+    );
+    for (const act of DEFAULT_SECURITY_ACTIVITIES) {
+      insRec.run(`${reportId}_${act.activityKey}`, reportId, act.activityKey, act.nameAr, act.nameEn, act.sortOrder);
+    }
+
+    db.prepare(
+      'INSERT INTO tasks (id, report_id, row_order, topic, task_name, status, completion_pct) VALUES (?, ?, 1, ?, ?, ?, 0)'
+    ).run(`${reportId}_task_1`, reportId, '', '', TASK_STATUSES.NOT_STARTED);
+
+    db.prepare(
+      'INSERT INTO challenges (id, report_id, row_order, challenge_text, update_text, recommendation_text) VALUES (?, ?, 1, ?, ?, ?)'
+    ).run(`${reportId}_chal_1`, reportId, '', '', '');
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      reportId,
+      params.user.id,
+      params.user.fullName,
+      params.user.role,
+      'إنشاء تقرير جديد',
+      'monthly_reports',
+      '',
+      reportNumber,
+      `إنشاء مسودة مستقلة لشهر ${params.month}/${params.year}`,
+      REPORT_STATUSES.DRAFT,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  const created = getReportById(reportId);
+  if (!created) throw new Error('تعذر تحميل التقرير بعد إنشائه');
+  return created;
+}
+
+export function saveReportData(reportId: string, payload: MonthlyReportFull, user: AuthUser): MonthlyReportFull {
+  const existing = getReportById(reportId);
+  if (!existing) throw new Error('التقرير غير موجود');
+
+  if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
+    throw new Error('يُمنع تعديل النسخة المعتمدة أو المؤرشفة مباشرة. أنشئ إصداراً جديداً للتصحيح.');
+  }
+  if (existing.status !== REPORT_STATUSES.DRAFT && user.role !== USER_ROLES.ADMIN) {
+    throw new Error('لا يمكن تعديل التقرير بعد تقديمه للمراجعة إلا بعد إرجاعه كمسودة');
+  }
+
+  // Validate services & non-negative counts
+  const seenServiceIds = new Set<string>();
+  for (const s of payload.services) {
+    if (!s.nameAr || !s.nameAr.trim()) {
+      throw new Error('يجب إدخال اسم الخدمة باللغة العربية لجميع بنود الخدمات');
+    }
+    if (s.receivedCount < 0 || s.executedCount < 0) {
+      throw new Error('لا يُسمح بالقيم السالبة في حقول الطلبات');
+    }
+    const sid = (s.serviceId || '').trim();
+    if (sid && seenServiceIds.has(sid)) {
+      throw new Error('يوجد معرف خدمة مكرر في قائمة الخدمات');
+    }
+    if (sid) seenServiceIds.add(sid);
+  }
+  for (const t of payload.tasks) {
+    if (t.completionPct < 0 || t.completionPct > 100) {
+      throw new Error('نسبة إنجاز المهمة يجب أن تكون بين 0 و 100');
+    }
+    if (t.status === TASK_STATUSES.COMPLETED && (!t.topic.trim() && !t.taskName.trim())) {
+      throw new Error('لا يمكن اعتبار صف فارغ مهمة مكتملة');
+    }
+  }
+  const seenSecurityKeys = new Set<string>();
+  for (const sr of payload.securityReception || []) {
+    if (!sr.nameAr || !sr.nameAr.trim()) {
+      throw new Error('يجب إدخال مسمى البيان لجميع أعمدة خدمات الأمن والاستقبال');
+    }
+    if (sr.receivedCount < 0 || sr.executedCount < 0) {
+      throw new Error('لا يُسمح بالقيم السالبة في حقول خدمات الأمن والاستقبال');
+    }
+    const key = (sr.activityKey || '').trim();
+    if (key && seenSecurityKeys.has(key)) {
+      throw new Error('يوجد معرف مكرر في أعمدة خدمات الأمن والاستقبال');
+    }
+    if (key) seenSecurityKeys.add(key);
+  }
+
+  const sanitizedPreparerSig = sanitizeSignatureDataUrl(payload.preparerSignatureImage);
+  const sanitizedApproverSig = sanitizeSignatureDataUrl(payload.approverSignatureImage);
+  const sanitizedPreparedAt = sanitizeReportDate(payload.preparedAt);
+  const sanitizedApprovedAt = sanitizeReportDate(payload.approvedAt);
+
+  const now = new Date().toISOString();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(
+      `UPDATE monthly_reports SET
+        classification = ?,
+        preparer_name = ?,
+        preparer_title = ?,
+        prepared_at = ?,
+        preparer_signature_image = ?,
+        approver_name = ?,
+        approver_title = ?,
+        approved_at = ?,
+        approver_signature_image = ?,
+        maint_from_facilities = ?,
+        maint_from_other = ?,
+        updated_at = ?
+      WHERE id = ?`
+    ).run(
+      payload.classification || 'Public',
+      payload.preparerName || '',
+      payload.preparerTitle || '',
+      sanitizedPreparedAt,
+      sanitizedPreparerSig,
+      payload.approverName || '',
+      payload.approverTitle || '',
+      sanitizedApprovedAt,
+      sanitizedApproverSig,
+      Math.max(0, Math.round(Number(payload.maintenanceServices.fromFacilitiesDept) || 0)),
+      Math.max(0, Math.round(Number(payload.maintenanceServices.fromOtherDepts) || 0)),
+      now,
+      reportId
+    );
+
+    const syncedPayload = syncReceptionServiceWithSecurity(payload);
+
+    db.prepare('DELETE FROM service_metrics WHERE report_id = ?').run(reportId);
+    const insSvc = db.prepare(
+      'INSERT INTO service_metrics (id, report_id, service_id, sort_order, summary_order, name_ar, name_en, received_count, executed_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    syncedPayload.services.forEach((s, idx) => {
+      const sid = (s.serviceId || '').trim() || `svc_${crypto.randomUUID().slice(0, 8)}`;
+      const nameAr = s.nameAr.trim();
+      const nameEn = (s.nameEn || '').trim() || nameAr;
+      const sortOrder = Number.isFinite(Number(s.sortOrder)) && Number(s.sortOrder) > 0 ? Number(s.sortOrder) : idx + 1;
+      const summaryOrder =
+        Number.isFinite(Number(s.summaryOrder)) && Number(s.summaryOrder) > 0 ? Number(s.summaryOrder) : idx + 1;
+      insSvc.run(
+        `${reportId}_${sid}`,
+        reportId,
+        sid,
+        sortOrder,
+        summaryOrder,
+        nameAr,
+        nameEn,
+        Math.max(0, Math.round(Number(s.receivedCount) || 0)),
+        Math.max(0, Math.round(Number(s.executedCount) || 0))
+      );
+    });
+
+    const updCon = db.prepare(
+      'UPDATE contracts_licenses SET active_count = ?, inactive_count = ?, notes = ? WHERE report_id = ? AND group_key = ?'
+    );
+    for (const c of payload.contracts) {
+      updCon.run(
+        Math.max(0, Math.round(Number(c.activeCount) || 0)),
+        Math.max(0, Math.round(Number(c.inactiveCount) || 0)),
+        c.notes || '',
+        reportId,
+        c.groupKey
+      );
+    }
+
+    const updSaf = db.prepare(
+      'UPDATE safety_metrics SET primary_count = ?, secondary_count = ?, notes = ? WHERE report_id = ? AND group_key = ?'
+    );
+    for (const sf of payload.safety) {
+      updSaf.run(
+        Math.max(0, Math.round(Number(sf.primaryCount) || 0)),
+        Math.max(0, Math.round(Number(sf.secondaryCount) || 0)),
+        sf.notes || '',
+        reportId,
+        sf.groupKey
+      );
+    }
+
+    const upsertMaint = db.prepare(
+      `INSERT INTO maintenance_records (id, report_id, site_id, category_id, fault_count)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(report_id, site_id, category_id) DO UPDATE SET fault_count = excluded.fault_count`
+    );
+    for (const [siteId, catMap] of Object.entries(payload.maintenanceMatrix || {})) {
+      for (const [catId, count] of Object.entries(catMap || {})) {
+        upsertMaint.run(
+          `${reportId}_${siteId}_${catId}`,
+          reportId,
+          siteId,
+          catId,
+          Math.max(0, Math.round(Number(count) || 0))
+        );
+      }
+    }
+
+    const upsertCost = db.prepare(
+      `INSERT INTO maintenance_costs (id, report_id, category_id, petty_cash_aed, purchase_order_aed)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(report_id, category_id) DO UPDATE SET
+         petty_cash_aed = excluded.petty_cash_aed,
+         purchase_order_aed = excluded.purchase_order_aed`
+    );
+    for (const [catId, entry] of Object.entries(payload.maintenanceCosts || {})) {
+      upsertCost.run(
+        `${reportId}_cost_${catId}`,
+        reportId,
+        catId,
+        Math.max(0, Math.round((Number(entry.pettyCashAed) || 0) * 100) / 100),
+        Math.max(0, Math.round((Number(entry.purchaseOrderAed) || 0) * 100) / 100)
+      );
+    }
+
+    const updLog = db.prepare('UPDATE logistics_metrics SET request_count = ? WHERE report_id = ? AND channel_key = ?');
+    for (const l of payload.logistics) {
+      updLog.run(Math.max(0, Math.round(Number(l.requestCount) || 0)), reportId, l.channelKey);
+    }
+
+    db.prepare('DELETE FROM reception_metrics WHERE report_id = ?').run(reportId);
+    const insRec = db.prepare(
+      'INSERT INTO reception_metrics (id, report_id, activity_key, name_ar, name_en, received_count, executed_count, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    (payload.securityReception || []).forEach((sr, idx) => {
+      const actKey = (sr.activityKey || '').trim() || `sec_${crypto.randomUUID().slice(0, 8)}`;
+      const nameAr = sr.nameAr.trim();
+      const nameEn = (sr.nameEn || '').trim() || nameAr;
+      const sortOrder =
+        Number.isFinite(Number(sr.sortOrder)) && Number(sr.sortOrder) > 0 ? Number(sr.sortOrder) : idx + 1;
+      insRec.run(
+        `${reportId}_${actKey}`,
+        reportId,
+        actKey,
+        nameAr,
+        nameEn,
+        Math.max(0, Math.round(Number(sr.receivedCount) || 0)),
+        Math.max(0, Math.round(Number(sr.executedCount) || 0)),
+        sortOrder
+      );
+    });
+
+    db.prepare('DELETE FROM tasks WHERE report_id = ?').run(reportId);
+    const insTask = db.prepare(
+      'INSERT INTO tasks (id, report_id, row_order, topic, task_name, status, completion_pct) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    payload.tasks.forEach((t, idx) => {
+      insTask.run(
+        t.id || crypto.randomUUID(),
+        reportId,
+        idx + 1,
+        t.topic || '',
+        t.taskName || '',
+        t.status || TASK_STATUSES.NOT_STARTED,
+        Math.max(0, Math.min(100, Math.round(Number(t.completionPct) || 0)))
+      );
+    });
+
+    db.prepare('DELETE FROM challenges WHERE report_id = ?').run(reportId);
+    const insChal = db.prepare(
+      'INSERT INTO challenges (id, report_id, row_order, challenge_text, update_text, recommendation_text) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    payload.challenges.forEach((c, idx) => {
+      insChal.run(
+        c.id || crypto.randomUUID(),
+        reportId,
+        idx + 1,
+        c.challengeText || '',
+        c.updateText || '',
+        c.recommendationText || ''
+      );
+    });
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      reportId,
+      user.id,
+      user.fullName,
+      user.role,
+      'حفظ وتحديث بيانات التقرير',
+      'monthly_reports',
+      existing.updatedAt,
+      now,
+      'تحديث البيانات التشغيلية في المسودة',
+      existing.currentVersion,
+      existing.status,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getReportById(reportId)!;
+}
+
+export function sanitizeSignatureDataUrl(val: unknown): string | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val !== 'string') {
+    throw new Error('صيغة صورة التوقيع غير صالحة');
+  }
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 750_000) {
+    throw new Error('حجم صورة التوقيع يتجاوز الحد المسموح (الحد الأقصى ~500 كيلوبايت)');
+  }
+  if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed)) {
+    throw new Error('يجب أن تكون صورة التوقيع بصيغة PNG أو JPG أو WEBP صالحة');
+  }
+  return trimmed;
+}
+
+export function sanitizeReportDate(val: unknown): string | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val !== 'string') {
+    throw new Error('صيغة التاريخ غير صالحة');
+  }
+  const trimmed = normalizeDigits(val).trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const parsed = new Date(`${trimmed}T12:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== trimmed) {
+      throw new Error('التاريخ المدخل غير صحيح');
+    }
+    return `${trimmed}T12:00:00.000Z`;
+  }
+
+  const parsedDDMMYYYY = parseDisplayDateDDMMYYYY(trimmed);
+  if (parsedDDMMYYYY) {
+    return `${parsedDDMMYYYY}T12:00:00.000Z`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error('يرجى إدخال تاريخ صحيح');
+  }
+  return parsed.toISOString();
+}
+
+export function saveReportDate(params: {
+  reportId: string;
+  target: 'preparedAt' | 'approvedAt';
+  dateValue: string | null;
+  user: AuthUser;
+}): MonthlyReportFull {
+  const existing = getReportById(params.reportId);
+  if (!existing) throw new Error('التقرير غير موجود');
+
+  if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
+    throw new Error('يُمنع تعديل تواريخ النسخة المعتمدة أو المؤرشفة مباشرة');
+  }
+
+  const { user, target } = params;
+  const isDraft = existing.status === REPORT_STATUSES.DRAFT;
+
+  if (target === 'preparedAt') {
+    const allowed = user.role === USER_ROLES.ADMIN || (user.role === USER_ROLES.PREPARER && isDraft);
+    if (!allowed) {
+      throw new Error('لا تملك صلاحية تعديل تاريخ التقديم في هذه المرحلة');
+    }
+  } else if (target === 'approvedAt') {
+    const allowed =
+      user.role === USER_ROLES.ADMIN ||
+      user.role === USER_ROLES.APPROVER ||
+      (user.role === USER_ROLES.PREPARER && isDraft);
+    if (!allowed) {
+      throw new Error('لا تملك صلاحية تعديل تاريخ الاعتماد في هذه المرحلة');
+    }
+  } else {
+    throw new Error('حقل التاريخ غير صالح');
+  }
+
+  const sanitized = sanitizeReportDate(params.dateValue);
+  const now = new Date().toISOString();
+  const column = target === 'preparedAt' ? 'prepared_at' : 'approved_at';
+  const label = target === 'preparedAt' ? 'تاريخ التقديم' : 'تاريخ الاعتماد';
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE monthly_reports SET ${column} = ?, updated_at = ? WHERE id = ?`).run(
+      sanitized,
+      now,
+      params.reportId
+    );
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      params.reportId,
+      user.id,
+      user.fullName,
+      user.role,
+      `تحديث ${label}`,
+      target,
+      formatDateWestern(existing[target], ''),
+      formatDateWestern(sanitized, ''),
+      `تعديل ${label} يدوياً`,
+      existing.currentVersion,
+      existing.status,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getReportById(params.reportId)!;
+}
+
+export function saveReportSignature(params: {
+  reportId: string;
+  target: 'preparer' | 'approver';
+  signatureImage: string | null;
+  user: AuthUser;
+}): MonthlyReportFull {
+  const existing = getReportById(params.reportId);
+  if (!existing) throw new Error('التقرير غير موجود');
+
+  if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
+    throw new Error('يُمنع تعديل توقيعات النسخة المعتمدة أو المؤرشفة مباشرة');
+  }
+
+  const { user, target } = params;
+  const isDraft = existing.status === REPORT_STATUSES.DRAFT;
+
+  if (target === 'preparer') {
+    const allowed = user.role === USER_ROLES.ADMIN || (user.role === USER_ROLES.PREPARER && isDraft);
+    if (!allowed) {
+      throw new Error('لا تملك صلاحية تعديل توقيع معد التقرير في هذه المرحلة');
+    }
+  } else if (target === 'approver') {
+    const allowed =
+      user.role === USER_ROLES.ADMIN ||
+      user.role === USER_ROLES.APPROVER ||
+      (user.role === USER_ROLES.PREPARER && isDraft);
+    if (!allowed) {
+      throw new Error('لا تملك صلاحية تعديل توقيع الاعتماد في هذه المرحلة');
+    }
+  } else {
+    throw new Error('نوع التوقيع المطلوب غير صحيح');
+  }
+
+  const sanitized = sanitizeSignatureDataUrl(params.signatureImage);
+  const now = new Date().toISOString();
+  const column = target === 'preparer' ? 'preparer_signature_image' : 'approver_signature_image';
+  const fieldPath = target === 'preparer' ? 'preparerSignatureImage' : 'approverSignatureImage';
+  const roleLabel = target === 'preparer' ? 'معد التقرير' : 'المعتمد';
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE monthly_reports SET ${column} = ?, updated_at = ? WHERE id = ?`).run(
+      sanitized,
+      now,
+      params.reportId
+    );
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      params.reportId,
+      user.id,
+      user.fullName,
+      user.role,
+      sanitized ? `إضافة / تحديث توقيع ${roleLabel}` : `حذف توقيع ${roleLabel}`,
+      fieldPath,
+      existing[fieldPath] ? 'توقيع محفوظ' : 'بدون توقيع',
+      sanitized ? 'توقيع مرفق/مرسوم' : 'محذوف',
+      `تحديث التوقيع الرسمي لـ ${roleLabel}`,
+      existing.currentVersion,
+      existing.status,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getReportById(params.reportId)!;
+}
+
+export function transitionWorkflow(params: {
+  reportId: string;
+  action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision';
+  user: AuthUser;
+  comment?: string;
+}): MonthlyReportFull {
+  const report = getReportById(params.reportId);
+  if (!report) throw new Error('التقرير غير موجود');
+
+  const { user, action, comment = '' } = params;
+  const now = new Date().toISOString();
+  const fromStatus = report.status;
+  let toStatus: ReportStatus = fromStatus;
+
+  // Enforce strict RBAC + state machine transitions
+  if (action === 'submit_review') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER] as UserRole[]).includes(user.role)) {
+      throw new Error('صلاحية تقديم التقرير للمراجعة مخصصة لمعد التقرير أو مدير النظام فقط');
+    }
+    if (fromStatus !== REPORT_STATUSES.DRAFT) throw new Error('يمكن تقديم التقرير للمراجعة من حالة المسودة فقط');
+    if (!report.preparerName.trim() || !report.preparerTitle.trim()) {
+      throw new Error('يجب استكمال اسم معد التقرير والمسمى الوظيفي قبل التقديم للمراجعة');
+    }
+    toStatus = REPORT_STATUSES.READY_FOR_REVIEW;
+  } else if (action === 'start_review') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
+      throw new Error('صلاحية بدء المراجعة مخصصة للمراجع أو مدير النظام فقط');
+    }
+    if (fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) throw new Error('التقرير ليس في حالة جاهز للمراجعة');
+    toStatus = REPORT_STATUSES.UNDER_REVIEW;
+  } else if (action === 'forward_approval') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
+      throw new Error('صلاحية رفع التقرير للاعتماد مخصصة للمراجع أو مدير النظام فقط');
+    }
+    if (fromStatus !== REPORT_STATUSES.UNDER_REVIEW && fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) {
+      throw new Error('يجب أن يكون التقرير قيد المراجعة لرفعه للاعتماد');
+    }
+    toStatus = REPORT_STATUSES.PENDING_APPROVAL;
+  } else if (action === 'return_revision') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+      throw new Error('لا تملك صلاحية إرجاع التقرير للتعديل');
+    }
+    if (
+      !(
+        [
+          REPORT_STATUSES.READY_FOR_REVIEW,
+          REPORT_STATUSES.UNDER_REVIEW,
+          REPORT_STATUSES.PENDING_APPROVAL,
+        ] as ReportStatus[]
+      ).includes(fromStatus)
+    ) {
+      throw new Error('لا يمكن إرجاع التقرير في حالته الحالية');
+    }
+    if (!comment.trim()) {
+      throw new Error('يجب كتابة سبب الإرجاع للتعديل');
+    }
+    toStatus = REPORT_STATUSES.DRAFT;
+  } else if (action === 'approve') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+      throw new Error('صلاحية الاعتماد النهائي مخصصة للمعتمد أو مدير النظام فقط');
+    }
+    if (fromStatus !== REPORT_STATUSES.PENDING_APPROVAL) {
+      throw new Error('يجب أن يكون التقرير في حالة بانتظار الاعتماد قبل اعتماده رسمياً');
+    }
+    if (!report.preparerName.trim()) {
+      throw new Error('حقل معد التقرير إلزامي قبل الاعتماد');
+    }
+    toStatus = REPORT_STATUSES.APPROVED;
+  } else if (action === 'archive') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+      throw new Error('صلاحية الأرشفة مخصصة للمعتمد أو مدير النظام فقط');
+    }
+    if (fromStatus !== REPORT_STATUSES.APPROVED) {
+      throw new Error('لا يمكن أرشفة تقرير غير معتمد');
+    }
+    toStatus = REPORT_STATUSES.ARCHIVED;
+  } else if (action === 'create_revision') {
+    if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+      throw new Error('لا تملك صلاحية فتح إصدار جديد للتصحيح');
+    }
+    if (fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
+      throw new Error('يُفتح إصدار جديد للتصحيح فقط بعد الاعتماد أو الأرشفة');
+    }
+    if (!comment.trim()) {
+      throw new Error('يرجى إدخال سبب فتح الإصدار الجديد');
+    }
+    toStatus = REPORT_STATUSES.DRAFT;
+  }
+
+  const sigToken = createSignatureToken(user.id, report.id, report.currentVersion, action);
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (action === 'submit_review') {
+      const effectivePreparedAt = report.preparedAt || now;
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, preparer_id = ?, prepared_at = ?, preparer_signature_hash = ?, updated_at = ? WHERE id = ?'
+      ).run(toStatus, user.id, effectivePreparedAt, sigToken, now, report.id);
+    } else if (action === 'start_review' || action === 'forward_approval') {
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, reviewer_id = ?, reviewer_name = ?, reviewer_title = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
+      ).run(toStatus, user.id, user.fullName, user.jobTitle, now, now, report.id);
+    } else if (action === 'return_revision') {
+      db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
+    } else if (action === 'approve') {
+      const effectiveApprovedAt = report.approvedAt || now;
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, approver_id = ?, approver_name = ?, approver_title = ?, approved_at = ?, approver_signature_hash = ?, updated_at = ? WHERE id = ?'
+      ).run(toStatus, user.id, user.fullName, user.jobTitle, effectiveApprovedAt, sigToken, now, report.id);
+
+      // Build immutable official snapshot
+      const updatedForSnapshot = getReportById(report.id)!;
+      const sites = getAllSites();
+      const categories = getAllCategories();
+      const thresholds = getThresholds();
+      const snapshotPayload = {
+        report: updatedForSnapshot,
+        sites,
+        categories,
+        thresholds,
+        approvedAt: effectiveApprovedAt,
+        approvedBy: { id: user.id, fullName: user.fullName, jobTitle: user.jobTitle },
+        signatureToken: sigToken,
+      };
+      db.prepare(
+        'INSERT INTO report_versions (id, report_id, version_number, snapshot_json, approved_by_id, approved_by_name, signature_token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        crypto.randomUUID(),
+        report.id,
+        report.currentVersion,
+        JSON.stringify(snapshotPayload),
+        user.id,
+        user.fullName,
+        sigToken,
+        now
+      );
+    } else if (action === 'archive') {
+      db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
+    } else if (action === 'create_revision') {
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, current_version = current_version + 1, approved_at = NULL, approver_signature_hash = NULL, updated_at = ? WHERE id = ?'
+      ).run(toStatus, now, report.id);
+    }
+
+    db.prepare(
+      'INSERT INTO approval_records (id, report_id, version_number, action, from_status, to_status, actor_id, actor_name, actor_role, comment, signature_token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      report.id,
+      report.currentVersion,
+      action,
+      fromStatus,
+      toStatus,
+      user.id,
+      user.fullName,
+      user.role,
+      comment,
+      sigToken,
+      now
+    );
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      report.id,
+      user.id,
+      user.fullName,
+      user.role,
+      `تغيير حالة التقرير (${action})`,
+      'status',
+      fromStatus,
+      toStatus,
+      comment || `توقيع إلكتروني موثق: ${sigToken}`,
+      report.currentVersion,
+      toStatus,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getReportById(report.id)!;
+}
+
+export function getReportHistory(reportId: string): {
+  approvals: ApprovalRecord[];
+  auditLogs: AuditLogEntry[];
+  versions: ReportVersionSummary[];
+} {
+  const approvals = (
+    db.prepare('SELECT * FROM approval_records WHERE report_id = ? ORDER BY created_at DESC').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((a) => ({
+    id: String(a.id),
+    reportId: String(a.report_id),
+    versionNumber: Number(a.version_number),
+    action: String(a.action),
+    fromStatus: String(a.from_status),
+    toStatus: String(a.to_status),
+    actorId: String(a.actor_id),
+    actorName: String(a.actor_name),
+    actorRole: String(a.actor_role),
+    comment: String(a.comment || ''),
+    signatureToken: String(a.signature_token),
+    createdAt: String(a.created_at),
+  }));
+
+  const auditLogs = (
+    db.prepare('SELECT * FROM audit_logs WHERE report_id = ? ORDER BY created_at DESC LIMIT 150').all(reportId) as Array<
+      Record<string, unknown>
+    >
+  ).map((l) => ({
+    id: String(l.id),
+    reportId: String(l.report_id),
+    userId: String(l.user_id),
+    userName: String(l.user_name),
+    userRole: String(l.user_role),
+    action: String(l.action),
+    fieldPath: String(l.field_path),
+    previousValue: String(l.previous_value || ''),
+    newValue: String(l.new_value || ''),
+    reason: String(l.reason || ''),
+    versionNumber: Number(l.version_number),
+    reportStatus: String(l.report_status),
+    createdAt: String(l.created_at),
+  }));
+
+  const versions = (
+    db
+      .prepare(
+        'SELECT id, report_id, version_number, approved_by_id, approved_by_name, signature_token, created_at FROM report_versions WHERE report_id = ? ORDER BY version_number DESC'
+      )
+      .all(reportId) as Array<Record<string, unknown>>
+  ).map((v) => ({
+    id: String(v.id),
+    reportId: String(v.report_id),
+    versionNumber: Number(v.version_number),
+    approvedById: String(v.approved_by_id),
+    approvedByName: String(v.approved_by_name),
+    signatureToken: String(v.signature_token),
+    createdAt: String(v.created_at),
+  }));
+
+  return { approvals, auditLogs, versions };
+}

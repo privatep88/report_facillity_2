@@ -1,0 +1,1223 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-arabic: 'Cairo', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+    --font-sans-ar: 'IBM Plex Sans Arabic', 'Cairo', system-ui, sans-serif;
+    --font-mono-num: 'IBM Plex Mono', monospace;
+
+    /* Exact Sampled Reference Design Tokens */
+    --brand-navy: #012E5E;
+    --brand-navy-dark: #022848;
+    --brand-navy-mid: #052C52;
+    --brand-blue: #0C4176;
+    --brand-blue-accent: #1769AA;
+    --brand-blue-border: #A3C0DE;
+    --brand-gold: #C99E4A;
+    --brand-gold-light: #DFC076;
+    --brand-gold-dark: #B38A3A;
+    --surface-white: #FEFEFE;
+    --surface-light: #F7FAFC;
+    --surface-canvas: #EEF3F9;
+    --table-alt-row: #E4EBF1;
+    --table-subheader: #DCE9F6;
+    --kpi-green-bg: #E3F7F3;
+    --kpi-blue-bg: #DCECFB;
+    --kpi-gold-bg: #F3EBDA;
+    --kpi-indigo-bg: #E7EBFC;
+    --success-green: #069B74;
+    --danger-red: #C43D47;
+  }
+
+  html {
+    font-family: var(--font-arabic);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: var(--font-arabic);
+    background-color: var(--surface-canvas);
+    color: var(--brand-navy);
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+    unicode-bidi: isolate;
+  }
+
+  .western-num {
+    direction: ltr;
+    unicode-bidi: isolate;
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+}
+
+/* Custom subtle scrollbars for wide matrices */
+.fm-scroll::-webkit-scrollbar {
+  height: 7px;
+  width: 7px;
+}
+
+.fm-scroll::-webkit-scrollbar-track {
+  background: #EAF4FC;
+  border-radius: 4px;
+}
+
+.fm-scroll::-webkit-scrollbar-thumb {
+  background: #94A3B8;
+  border-radius: 4px;
+}
+
+.fm-scroll::-webkit-scrollbar-thumb:hover {
+  background: #1769AA;
+}
+
+/* Layered Corporate Executive Header (Real HTML Text + High-Res Visual Assets) */
+.saaed-executive-header {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background-color: #022b58;
+  direction: ltr;
+  container-type: inline-size;
+}
+
+.saaed-executive-header h1,
+.saaed-executive-header p,
+.saaed-executive-header span {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.saaed-executive-header .header-visual {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.saaed-executive-header .header-backdrop-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+}
+
+.saaed-executive-header .header-backdrop-fallback {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #01244c 0%, #073c70 60%, #022e5a 100%);
+}
+
+.saaed-executive-header .header-right-wing-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.saaed-executive-header .header-bottom-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.saaed-executive-header .header-foreground {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+}
+
+.saaed-executive-header .header-title-group h1 {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-weight: 800;
+  color: #ffffff;
+  direction: rtl;
+  unicode-bidi: isolate;
+  line-height: 1.24;
+  margin: 0;
+  text-shadow: 0 1px 3px rgba(0, 12, 30, 0.35);
+}
+
+.saaed-executive-header .header-title-group p {
+  font-family: 'IBM Plex Sans Arabic', 'Cairo', Arial, sans-serif;
+  font-weight: 700;
+  color: #f8fafc;
+  direction: ltr;
+  unicode-bidi: isolate;
+  line-height: 1.28;
+  margin: 0;
+  text-shadow: 0 1px 2px rgba(0, 12, 30, 0.3);
+}
+
+.saaed-executive-header .header-title-divider {
+  width: 96%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.72) 22%,
+    rgba(255, 255, 255, 0.92) 50%,
+    rgba(255, 255, 255, 0.72) 78%,
+    transparent 100%
+  );
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.saaed-executive-header .header-department {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #f1f5f9;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.saaed-executive-header .header-department-sep {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
+}
+
+.saaed-executive-header .header-brand-ar {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-weight: 800;
+  color: #0b2341;
+  direction: rtl;
+  unicode-bidi: isolate;
+}
+
+.saaed-executive-header .header-brand-en {
+  font-family: 'IBM Plex Sans Arabic', 'Cairo', Arial, sans-serif;
+  font-weight: 700;
+  color: #0f172a;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.saaed-executive-header .header-brand-fallback-logo {
+  font-weight: 800;
+  color: #0b2341;
+}
+
+/* Desktop, Wide Screens & Print: Exact 1199:133 Reference Proportions */
+@media (min-width: 768px), print {
+  .saaed-executive-header {
+    aspect-ratio: 1199 / 133;
+  }
+
+  .saaed-executive-header .header-content {
+    position: absolute;
+    left: 33.1%;
+    right: 23.1%;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1.25cqi;
+    padding-bottom: 0.25cqi;
+  }
+
+  .saaed-executive-header .header-emblem {
+    width: 6.0cqi;
+    height: 5.35cqi;
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 0.72cqi;
+  }
+
+  .saaed-executive-header .header-emblem-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .saaed-executive-header .header-title-group {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .saaed-executive-header .header-title-group h1 {
+    font-size: 2.38cqi;
+    line-height: 1.22;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+
+  .saaed-executive-header .header-title-group p {
+    font-size: 1.38cqi;
+    margin-top: 0.34cqi;
+    white-space: nowrap;
+  }
+
+  .saaed-executive-header .header-title-divider {
+    margin: 0.36cqi auto 0.3cqi;
+  }
+
+  .saaed-executive-header .header-department {
+    gap: 0.9cqi;
+    font-size: 1.02cqi;
+    white-space: nowrap;
+  }
+
+  .saaed-executive-header .header-brand {
+    position: absolute;
+    left: 80.3%;
+    right: 0.6%;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0.25cqi 0.5cqi 0.55cqi;
+  }
+
+  .saaed-executive-header .header-brand-logo {
+    width: 15.2cqi;
+    max-width: 100%;
+    height: auto;
+    max-height: 5.55cqi;
+    object-fit: contain;
+    display: block;
+    margin-bottom: 0.22cqi;
+  }
+
+  .saaed-executive-header .header-brand-ar {
+    font-size: 1.18cqi;
+    line-height: 1.24;
+    white-space: nowrap;
+  }
+
+  .saaed-executive-header .header-brand-en {
+    font-size: 0.95cqi;
+    line-height: 1.22;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+}
+
+/* Mobile Responsive Layout (< 768px non-print) */
+@media screen and (max-width: 767px) {
+  .saaed-executive-header .header-right-wing-svg,
+  .saaed-executive-header .header-bottom-edge {
+    display: none;
+  }
+
+  .saaed-executive-header .header-backdrop-img {
+    opacity: 0.22;
+    object-position: left center;
+  }
+
+  .saaed-executive-header .header-foreground {
+    display: flex;
+    flex-direction: column-reverse;
+  }
+
+  .saaed-executive-header .header-brand {
+    background: #ffffff;
+    border-bottom: 3px solid #c99e4a;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 2px;
+  }
+
+  .saaed-executive-header .header-brand-logo {
+    height: 44px;
+    width: auto;
+    object-fit: contain;
+    margin-bottom: 4px;
+  }
+
+  .saaed-executive-header .header-brand-ar {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  .saaed-executive-header .header-brand-en {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .saaed-executive-header .header-content {
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .saaed-executive-header .header-emblem {
+    width: 42px;
+    height: 38px;
+    flex-shrink: 0;
+  }
+
+  .saaed-executive-header .header-emblem-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .saaed-executive-header .header-title-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 4px;
+  }
+
+  .saaed-executive-header .header-title-group h1 {
+    font-size: 17px;
+  }
+
+  .saaed-executive-header .header-title-group p {
+    font-size: 11px;
+  }
+
+  .saaed-executive-header .header-title-divider {
+    margin: 4px auto;
+  }
+
+  .saaed-executive-header .header-department {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 10.5px;
+  }
+}
+
+/* Layered Compact Corporate Executive Footer (Real HTML Text + 4K Left Visual Wing) */
+.saaed-executive-footer,
+.executive-footer {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24% 42% 34%;
+  align-items: center;
+  width: 100%;
+  min-height: 78px;
+  padding: 8px 22px 10px 0;
+  background: linear-gradient(
+    90deg,
+    #062d58 0%,
+    #08386b 14%,
+    #0a3d73 36%,
+    #0c477b 52%,
+    #07315c 78%,
+    #041e3c 100%
+  );
+  border-top: 2px solid #d3ad5e;
+  box-shadow: inset 0 1px 0 rgba(240, 211, 140, 0.32);
+  box-sizing: border-box;
+  overflow: hidden;
+  direction: ltr;
+}
+
+.saaed-executive-footer__arabic,
+.saaed-executive-footer__english,
+.saaed-executive-footer__pipe {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.saaed-executive-footer__visual {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: auto;
+  max-width: 24.5%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.saaed-executive-footer__visual picture {
+  display: block;
+  width: auto;
+  height: 100%;
+}
+
+.saaed-executive-footer__visual-img {
+  display: block;
+  width: auto;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+}
+
+.saaed-executive-footer__visual-fallback {
+  width: 260px;
+  height: 100%;
+  background: linear-gradient(90deg, #041e3c 0%, #062b53 100%);
+}
+
+.saaed-executive-footer__divider {
+  position: absolute;
+  left: 20.5%;
+  right: 2.2%;
+  bottom: 7px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(211, 173, 94, 0.05) 0%,
+    rgba(182, 205, 235, 0.45) 14%,
+    rgba(211, 173, 94, 0.52) 50%,
+    rgba(182, 205, 235, 0.45) 86%,
+    rgba(211, 173, 94, 0.08) 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+.saaed-executive-footer__left-slot {
+  position: relative;
+  z-index: 2;
+  min-height: 1px;
+}
+
+.saaed-executive-footer__center {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 2px;
+  padding: 2px 8px 4px;
+}
+
+.saaed-executive-footer__right {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 2px 4px 4px 8px;
+}
+
+.saaed-executive-footer__credit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.saaed-executive-footer__arabic {
+  font-family: 'Cairo', 'IBM Plex Sans Arabic', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #ffffff;
+  direction: rtl;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 14, 36, 0.45);
+}
+
+.saaed-executive-footer__english {
+  font-family: 'Inter', 'IBM Plex Sans Arabic', 'Cairo', Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: #e5edf7;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 14, 36, 0.38);
+}
+
+.saaed-executive-footer__pipe {
+  display: inline-block;
+  color: #f0d38c;
+  font-weight: 600;
+  margin: 0 0.35em;
+}
+
+.saaed-executive-footer__pen {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.saaed-executive-footer__pen-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 12, 32, 0.45));
+}
+
+/* Tablet & Compact Screens (768px - 1024px) */
+@media screen and (min-width: 768px) and (max-width: 1024px) {
+  .saaed-executive-footer,
+  .executive-footer {
+    grid-template-columns: 25% 41% 34%;
+    min-height: 74px;
+    padding: 6px 14px 8px 0;
+  }
+
+  .saaed-executive-footer__arabic {
+    font-size: 13px;
+  }
+
+  .saaed-executive-footer__english {
+    font-size: 10.2px;
+  }
+
+  .saaed-executive-footer__pen {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+/* Mobile Responsive Layout (< 768px non-print) */
+@media screen and (max-width: 767px) {
+  .saaed-executive-footer,
+  .executive-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 76px;
+    padding: 12px 16px;
+  }
+
+  .saaed-executive-footer__visual {
+    width: 48%;
+    max-width: 220px;
+    min-width: 140px;
+    opacity: 0.24;
+  }
+
+  .saaed-executive-footer__left-slot,
+  .saaed-executive-footer__divider {
+    display: none;
+  }
+
+  .saaed-executive-footer__right {
+    justify-content: center;
+    width: 100%;
+    padding-top: 6px;
+    border-top: 1px solid rgba(211, 173, 94, 0.28);
+  }
+
+  .saaed-executive-footer__arabic {
+    font-size: 13px;
+    white-space: normal;
+  }
+
+  .saaed-executive-footer__english {
+    font-size: 10.5px;
+    white-space: normal;
+  }
+}
+
+/* Print Styles for Official Executive Report Preview */
+@media print {
+  @page {
+    margin: 12mm 10mm 16mm 10mm;
+  }
+
+  html,
+  body {
+    background: #FFFFFF !important;
+    color: #012E5E !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    font-size: 11px !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .saaed-executive-header {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    width: 100% !important;
+    aspect-ratio: 1199 / 133 !important;
+  }
+
+  .saaed-executive-footer,
+  .executive-footer {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    width: 100% !important;
+    min-height: 72px !important;
+    max-height: 84px !important;
+    padding: 6px 16px 8px 0 !important;
+  }
+
+  .print-section {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+    margin-bottom: 14px !important;
+  }
+
+  .print-table-section {
+    break-inside: auto;
+    margin-bottom: 16px !important;
+  }
+
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-footer-fixed {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #FFFFFF;
+    border-top: 1px solid #C99E4A;
+    padding: 4px 10px;
+    font-size: 9px;
+  }
+
+  .smart-numeric-controls,
+  .saaed-spin-rail {
+    display: none !important;
+  }
+
+  .smart-numeric-field--editable,
+  .saaed-spin-input--editable {
+    padding-inline: 4px !important;
+  }
+}
+
+/* Smart Contextual Numeric Spin Buttons (Focus-Activated + Zero Layout Shift) */
+.smart-numeric-input,
+.saaed-spin-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  min-width: 0;
+  direction: ltr;
+}
+
+.smart-numeric-input input::-webkit-inner-spin-button,
+.smart-numeric-input input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.smart-numeric-input input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.smart-numeric-field {
+  box-sizing: border-box;
+  text-align: center !important;
+}
+
+/* Constant symmetric horizontal padding guarantees 0px layout shift on focus */
+.smart-numeric-field--editable {
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+}
+
+.smart-numeric-field--editable.w-14 {
+  width: 4.85rem;
+}
+
+.smart-numeric-field--editable.w-16 {
+  width: 5.15rem;
+}
+
+.smart-numeric-field--editable.w-20 {
+  width: 5.5rem;
+}
+
+.smart-numeric-field--editable.smart-numeric-field--decimal.w-16 {
+  width: 5.75rem;
+}
+
+/* Hidden by default; revealed strictly on focus-within / active focus */
+.smart-numeric-controls,
+.saaed-spin-rail {
+  position: absolute;
+  inset-inline-end: 2px;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: 22px;
+  display: flex;
+  flex-direction: column;
+  background-color: #eff6ff;
+  border-left: 1px solid #c5d8ee;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  overflow: hidden;
+  z-index: 3;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.smart-numeric-input:focus-within .smart-numeric-controls,
+.smart-numeric-input[data-focused='true'] .smart-numeric-controls {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.smart-numeric-btn,
+.saaed-spin-btn {
+  flex: 1 1 50%;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background-color: transparent;
+  color: #0c2544;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.smart-numeric-btn--up,
+.saaed-spin-btn--up {
+  border-bottom: 1px solid #c5d8ee;
+}
+
+.smart-numeric-btn:hover:not(:disabled),
+.saaed-spin-btn:hover:not(:disabled) {
+  background-color: #dce9f6;
+  color: #176daa;
+}
+
+.smart-numeric-btn:active:not(:disabled),
+.saaed-spin-btn:active:not(:disabled) {
+  background-color: #176daa;
+  color: #ffffff;
+}
+
+.smart-numeric-btn:disabled,
+.saaed-spin-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.smart-numeric-arrow,
+.saaed-spin-arrow {
+  width: 8px;
+  height: 5px;
+  display: block;
+  pointer-events: none;
+}
+
+/* ========================================================================= */
+/* Requests by Service — Compact Executive Table & Synchronized Display Box  */
+/* ========================================================================= */
+
+.requests-by-service-card {
+  width: 100%;
+}
+
+.requests-by-service-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  direction: rtl;
+}
+
+.requests-by-service-table thead th {
+  height: 36px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.requests-by-service-table tbody tr {
+  height: 34px;
+  min-height: 34px;
+  max-height: 36px;
+}
+
+.requests-by-service-table tbody td {
+  padding: 1px 8px;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.requests-by-service-table .service-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #012e5e;
+  line-height: 1.2;
+}
+
+/* Ultra-Compact Read-Only Synchronized Count Display (84x26px) */
+.requests-by-service-table .service-count-box,
+.service-count-display {
+  width: 84px;
+  max-width: 100%;
+  height: 26px;
+  min-height: 26px;
+  max-height: 26px;
+  padding: 0 4px;
+  margin-inline: auto;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+
+  background: #ffffff;
+  border: 1px solid #c5d8ee;
+  border-radius: 5px;
+
+  color: #0c2544;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1;
+
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  direction: ltr;
+  unicode-bidi: isolate;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: default;
+  caret-color: transparent;
+  transition: border-color 120ms ease;
+}
+
+.requests-by-service-table .service-percentage {
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.requests-by-service-table tfoot tr {
+  height: 36px;
+  min-height: 36px;
+}
+
+@media screen and (max-width: 640px) {
+  .requests-by-service-table thead th {
+    height: 34px;
+    font-size: 11.5px;
+  }
+
+  .requests-by-service-table tbody tr {
+    height: 32px;
+  }
+
+  .requests-by-service-table .service-count-box,
+  .service-count-display {
+    width: 76px;
+    height: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    font-size: 11.5px;
+  }
+
+  .requests-by-service-table tfoot tr {
+    height: 34px;
+  }
+}
+
+@media print {
+  .requests-by-service-table thead th {
+    height: 30px;
+    font-size: 11px;
+  }
+
+  .requests-by-service-table tbody tr {
+    height: 28px;
+  }
+
+  .requests-by-service-table .service-count-box,
+  .service-count-display {
+    width: 76px;
+    height: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    font-size: 11px;
+  }
+
+  .requests-by-service-table tfoot tr {
+    height: 30px;
+  }
+}
+
+/* ========================================================================= */
+/* SAAED Maintenance Details Table — Desktop Zero-Scroll & Adaptive Layout   */
+/* ========================================================================= */
+
+.maintenance-table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+@media screen and (min-width: 1024px) {
+  .maintenance-table-wrapper {
+    overflow-x: visible;
+  }
+}
+
+.maintenance-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  direction: rtl;
+}
+
+.maintenance-table th,
+.maintenance-table td {
+  box-sizing: border-box;
+  vertical-align: middle;
+  min-width: 0;
+}
+
+/* Category header allowing clean two-line wrap */
+.maintenance-th-cat {
+  padding: 6px 2px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Matrix Table Numeric Input (Fits in 100% of cell without overflowing) */
+.smart-numeric-input:has(.matrix-numeric-input),
+.smart-numeric-input--matrix {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  display: flex !important;
+  position: relative !important;
+}
+
+.smart-numeric-input:has(.matrix-numeric-input) .smart-numeric-controls,
+.smart-numeric-input--matrix .smart-numeric-controls {
+  width: 16px !important;
+  right: 1px !important;
+  top: 1px !important;
+  bottom: 1px !important;
+  border-top-right-radius: 4px !important;
+  border-bottom-right-radius: 4px !important;
+}
+
+.smart-numeric-input:has(.matrix-numeric-input) .smart-numeric-arrow,
+.smart-numeric-input--matrix .smart-numeric-arrow {
+  width: 6.5px !important;
+  height: 4px !important;
+}
+
+.matrix-numeric-input {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  height: 31px !important;
+  box-sizing: border-box !important;
+  text-align: center !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  border-radius: 5px !important;
+  line-height: 1 !important;
+  padding-left: 17px !important;
+  padding-right: 17px !important;
+  border: 1px solid #c5d8ee !important;
+  background-color: #ffffff !important;
+  color: #0c2544 !important;
+  transition: border-color 120ms ease, background-color 120ms ease !important;
+}
+
+.matrix-numeric-input:focus {
+  border-color: #1769AA !important;
+  background-color: #ffffff !important;
+  outline: none !important;
+}
+
+.matrix-numeric-input--active {
+  background-color: #f0f7ff !important;
+  border-color: #9ac2ea !important;
+  color: #08284d !important;
+}
+
+.matrix-numeric-input--decimal {
+  font-size: 11px !important;
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+@media print {
+  .maintenance-table {
+    table-layout: fixed !important;
+    width: 100% !important;
+  }
+}
+
+/* ========================================================================= */
+/* Services Summary Table — Strict Equal Numeric Input Width                 */
+/* ========================================================================= */
+
+.services-summary-table {
+  width: 100%;
+}
+
+.services-summary-table .services-summary-th-numeric,
+.services-summary-table .services-summary-td-numeric {
+  width: 110px !important;
+  min-width: 110px !important;
+  max-width: 110px !important;
+  box-sizing: border-box !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+.services-summary-table .services-summary-cell {
+  width: 100%;
+  max-width: 86px;
+  min-width: 0;
+  margin-inline: auto;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Equal width for wrapper and input */
+.smart-numeric-input:has(.services-summary-numeric-input),
+.smart-numeric-input--services-summary {
+  width: 86px !important;
+  max-width: 86px !important;
+  min-width: 86px !important;
+  margin-inline: auto !important;
+  display: flex !important;
+  position: relative !important;
+  box-sizing: border-box !important;
+}
+
+/* Exactly identical dimensions for editable and read-only inputs */
+.services-summary-numeric-box,
+.services-summary-numeric-input,
+.services-summary-table .received-input,
+.services-summary-table .completed-input {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 86px !important;
+  max-width: 86px !important;
+  min-width: 86px !important;
+  margin-inline: auto !important;
+  box-sizing: border-box !important;
+  text-align: center !important;
+
+  /* STRICT PRESERVATION OF EXISTING HEIGHT: 28px (h-7) */
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  line-height: 26px !important;
+
+  padding: 0 16px !important;
+  border-radius: 6px !important;
+  border: 1px solid #c5d8ee !important;
+  background-color: #ffffff !important;
+  color: #012e5e !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  font-variant-numeric: tabular-nums lining-nums !important;
+  font-feature-settings: 'tnum' 1, 'lnum' 1 !important;
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  transition: border-color 120ms ease, background-color 120ms ease !important;
+}
+
+.services-summary-table .completed-input {
+  color: #069b74 !important;
+}
+
+.services-summary-numeric-input:focus {
+  background-color: #ffffff !important;
+  outline: none !important;
+}
+
+.services-summary-numeric-input.received-input:focus {
+  border-color: #1769aa !important;
+}
+
+.services-summary-numeric-input.completed-input:focus {
+  border-color: #069b74 !important;
+}
+
+/* Compact spin controls for 28px height, focus-revealed strictly */
+.smart-numeric-input--services-summary .smart-numeric-controls,
+.smart-numeric-input:has(.services-summary-numeric-input) .smart-numeric-controls {
+  width: 16px !important;
+  right: 1px !important;
+  top: 1px !important;
+  bottom: 1px !important;
+  border-top-right-radius: 4px !important;
+  border-bottom-right-radius: 4px !important;
+}
+
+.smart-numeric-input--services-summary .smart-numeric-arrow,
+.smart-numeric-input:has(.services-summary-numeric-input) .smart-numeric-arrow {
+  width: 6.5px !important;
+  height: 4px !important;
+}
+
+
