@@ -20,12 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies (deterministic lockfile install)
@@ -41,9 +41,10 @@ jobs:
           touch dist/.nojekyll
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./dist
+          include-hidden-files: 'true'
 
   deploy:
     environment:
@@ -52,6 +53,48 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
+      - name: Wait for any legacy branch Pages build to finish first
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          node -e '
+            const repo = process.env.REPO;
+            const sha = process.env.SHA;
+            const token = process.env.GH_TOKEN;
+            async function waitForLegacyPages() {
+              for (let i = 0; i < 24; i++) {
+                try {
+                  const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?head_sha=${sha}`, {
+                    headers: token
+                      ? { Authorization: `Bearer ${token}`, "User-Agent": "saaed-pages-deploy" }
+                      : { "User-Agent": "saaed-pages-deploy" }
+                  });
+                  const data = await res.json();
+                  const runs = data.workflow_runs || [];
+                  const legacy = runs.find(
+                    r => r.path === "dynamic/pages/pages-build-deployment" || r.name === "pages build and deployment"
+                  );
+                  if (!legacy) {
+                    if (i >= 2) break;
+                  } else if (legacy.status === "completed") {
+                    console.log("Legacy pages-build-deployment completed; proceeding with Vite dist deployment.");
+                    await new Promise(r => setTimeout(r, 3000));
+                    break;
+                  } else {
+                    console.log(`Waiting for legacy pages-build-deployment (status=${legacy.status})...`);
+                  }
+                } catch (err) {
+                  console.log("Legacy check skipped:", err.message);
+                  break;
+                }
+                await new Promise(r => setTimeout(r, 5000));
+              }
+            }
+            waitForLegacyPages();
+          '
+
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
