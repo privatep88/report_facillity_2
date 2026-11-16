@@ -1,6 +1,7 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -113,6 +114,7 @@ function requireRole(allowed: UserRole[]) {
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
 
   // Safe CORS support for separate frontend deployments (e.g. GitHub Pages -> Express API)
   app.use('/api', (req: Request, res: Response, next: NextFunction) => {
@@ -749,8 +751,9 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: false,
-        watch: null,
+        allowedHosts: true,
+        ws: { server: httpServer },
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
       },
       appType: 'spa',
     });
@@ -764,8 +767,9 @@ async function startServer() {
     });
   }
 
-  const PORT = Number(process.env.PORT || 3000);
-  app.listen(PORT, '0.0.0.0', () => {
+  const rawPort = Number(process.env.APP_PORT || process.env.PORT || 3000);
+  const PORT = rawPort === 8080 ? 3000 : rawPort;
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`SAAED Facilities Management Executive System running on http://0.0.0.0:${PORT}`);
   });
 }
