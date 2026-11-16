@@ -12,12 +12,12 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
 
   return (
     <header className={`saaed-executive-header ${className}`.trim()} dir="ltr">
-      {/* Layer 1: Clean Text-Free Visual Backdrop, Skyline, Navy Gradient, Gold Diagonal & White Wing */}
+      {/* Layer 1: High-Resolution Text-Free Visual Backdrop (Building, UAE Flag, Skyline & Navy Gradient) */}
       <div className="header-visual" aria-hidden="true">
         {!backdropFailed ? (
           <img
             src={headerBackdrop}
-            alt=""
+            alt="المقر الرئيسي لشركة ساعد للأنظمة المرورية — إدارة المرافق"
             className="header-backdrop-img"
             width={2398}
             height={266}
@@ -29,33 +29,36 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
           <div className="header-backdrop-fallback" />
         )}
 
-        {/* Right Gold Diagonal Ribbon + White Slanted Wing (Desktop & Print exact geometry) */}
+        {/* Vector Metallic Gold Diagonal Ribbons & Pure White Right Wing (Desktop & Print geometry) */}
         <svg
-          className="header-right-wing-svg"
+          className="header-ribbons-svg"
           viewBox="0 0 1199 133"
           preserveAspectRatio="none"
           focusable="false"
+          aria-hidden="true"
         >
           <defs>
             <linearGradient id="saaedHeaderGoldRibbon" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#EAD084" />
-              <stop offset="45%" stopColor="#D4A64E" />
+              <stop offset="0%" stopColor="#F5D98A" />
+              <stop offset="45%" stopColor="#DFB357" />
               <stop offset="100%" stopColor="#A97B27" />
             </linearGradient>
           </defs>
-          {/* Metallic Gold Diagonal Accent */}
+          {/* Left Metallic Gold Diagonal Accent */}
+          <polygon points="405,0 422,0 302,133 285,133" fill="url(#saaedHeaderGoldRibbon)" />
+          {/* Right Metallic Gold Diagonal Accent */}
           <polygon points="984,0 1001,0 897,133 880,133" fill="url(#saaedHeaderGoldRibbon)" />
           {/* Pure White Right Brand Wing */}
           <polygon points="1001,0 1199,0 1199,133 897,133" fill="#FFFFFF" />
         </svg>
 
-        {/* Subtle Bottom Edge Highlight Matching Reference */}
+        {/* Subtle Bottom Edge Highlight Accent */}
         <div className="header-bottom-edge" />
       </div>
 
-      {/* Layer 2 & 3: Real Selectable HTML Typography + Vector Emblem + Official SAAED Logo */}
+      {/* Layer 2: Real Selectable HTML Typography + Vector Emblem + Official SAAED Logo */}
       <div className="header-foreground">
-        {/* Center Title Zone (Left-aligned after building/skyline, matching reference geometry) */}
+        {/* Center Zone: Vector Gold Architectural Emblem + Official Report Titles */}
         <div className="header-content">
           {/* Vector Gold Building & Gear Architectural Emblem */}
           <div className="header-emblem" aria-hidden="true">
@@ -143,7 +146,7 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
           </div>
         </div>
 
-        {/* Layer 3: Official SAAED Brand Wing on the Visual Right */}
+        {/* Right Zone: Official SAAED Brand Wing on the Visual Right */}
         <div className="header-brand">
           {!logoFailed ? (
             <img

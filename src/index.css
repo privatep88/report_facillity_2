@@ -74,7 +74,7 @@
   background: #1769AA;
 }
 
-/* Layered Corporate Executive Header (Real HTML Text + High-Res Visual Assets) */
+/* Layered Corporate Executive Header (Exact 1199:133 Reference Architecture) */
 .saaed-executive-header {
   position: relative;
   width: 100%;
@@ -112,7 +112,7 @@
   background: linear-gradient(135deg, #01244c 0%, #073c70 60%, #022e5a 100%);
 }
 
-.saaed-executive-header .header-right-wing-svg {
+.saaed-executive-header .header-ribbons-svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -150,7 +150,7 @@
 .saaed-executive-header .header-title-group p {
   font-family: 'IBM Plex Sans Arabic', 'Cairo', Arial, sans-serif;
   font-weight: 700;
-  color: #f8fafc;
+  color: #ffffff;
   direction: ltr;
   unicode-bidi: isolate;
   line-height: 1.28;
@@ -312,7 +312,7 @@
 
 /* Mobile Responsive Layout (< 768px non-print) */
 @media screen and (max-width: 767px) {
-  .saaed-executive-header .header-right-wing-svg,
+  .saaed-executive-header .header-ribbons-svg,
   .saaed-executive-header .header-bottom-edge {
     display: none;
   }
