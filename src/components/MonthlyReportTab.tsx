@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -14,24 +14,24 @@ import {
 import {
   AlertCircle,
   AlertTriangle,
-  Archive,
   Award,
   Briefcase,
   Building2,
   Check,
   CheckCircle2,
-  ClipboardCheck,
   ClipboardList,
   Coins,
   Eye,
   FileCheck2,
   FileSpreadsheet,
+  FileText,
   Flame,
   History,
   ImagePlus,
   Layers,
   Lightbulb,
   ListChecks,
+  Loader2,
   Lock,
   MessageSquare,
   Pencil,
@@ -42,13 +42,16 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Target,
   Trash2,
   Truck,
   UserCheck,
   Wrench,
   X,
+  XCircle,
 } from 'lucide-react';
+import { populateReportWithSampleData } from '../utils/sampleReportData.ts';
 import type {
   AuthUser,
   MaintenanceCategory,
@@ -67,22 +70,35 @@ import {
 import {
   computeReportMetrics,
   formatAed,
+  formatDateTimeWestern,
   formatNumber,
   formatPct,
   formatPercentage,
   isLogisticsServiceRow,
 } from '../utils/calculations.ts';
+import { evaluateDualSignatureApproval } from '../utils/signatureValidation.ts';
 import { getServiceVisual } from '../utils/serviceVisuals.tsx';
 import { NumericInput } from './NumericInput.tsx';
+import { LogisticsHorizontalChart } from './LogisticsHorizontalChart.tsx';
+import { MaintenanceSiteHorizontalChart } from './MaintenanceSiteHorizontalChart.tsx';
 import { SectionCard } from './SectionCard.tsx';
 import { SignaturePadModal } from './SignaturePadModal.tsx';
 import { WesternDatePicker } from './WesternDatePicker.tsx';
+import { useNotification } from '../notifications/NotificationProvider.tsx';
+import {
+  STAGE_ACTION_LABELS_AR,
+  validateReportCompleteness,
+} from '../services/ReportValidationService.ts';
 import engineerImg from '../assets/images/engineer_tablet_inspector_1794730112530.jpg';
 import technicianImg from '../assets/images/technician_electrical_panel_1794730113102.jpg';
 import fireExtImg from '../assets/images/fire_extinguisher_safety_1794730113921.jpg';
 import engineeringImg from '../assets/images/facility_engineering_ops_1794728989361.jpg';
 import receptionImg from '../assets/images/facility_reception_hall_1794728988518.jpg';
 import safetyImg from '../assets/images/facility_safety_logistics_1794728989271.jpg';
+import {
+  EXECUTIVE_KPI_IMAGES,
+  resolveTopServiceKpiImage,
+} from '../utils/executiveKpiVisuals.ts';
 
 const QUICK_SECTIONS = [
   { id: 'sec-summary', label: 'الملخص التنفيذي' },
@@ -102,11 +118,8 @@ const QUICK_SECTIONS = [
 
 const WORKFLOW_STEPS: Array<{ key: string; label: string }> = [
   { key: REPORT_STATUSES.DRAFT, label: 'مسودة' },
-  { key: REPORT_STATUSES.READY_FOR_REVIEW, label: 'جاهز للمراجعة' },
-  { key: REPORT_STATUSES.UNDER_REVIEW, label: 'قيد المراجعة' },
   { key: REPORT_STATUSES.PENDING_APPROVAL, label: 'بانتظار الاعتماد' },
   { key: REPORT_STATUSES.APPROVED, label: 'معتمد' },
-  { key: REPORT_STATUSES.ARCHIVED, label: 'مؤرشف' },
 ];
 
 interface MonthlyReportTabProps {
@@ -117,12 +130,16 @@ interface MonthlyReportTabProps {
   user: AuthUser | null;
   dirty: boolean;
   saving: boolean;
+  savingSignatureTarget?: 'preparer' | 'approver' | null;
   onChangeReport: (updater: (prev: MonthlyReportFull) => MonthlyReportFull) => void;
   onSave: () => Promise<void>;
   onSaveSignature: (target: 'preparer' | 'approver', signatureImage: string | null) => Promise<void>;
   onSaveDate: (target: 'preparedAt' | 'approvedAt', dateValue: string | null) => Promise<void>;
   onOpenPreview: () => void;
+  onExportPdf?: () => void;
   onExportExcel: () => void;
+  exportingPdf?: boolean;
+  exportingExcel?: boolean;
   onOpenHistory: () => void;
   onOpenSitesModal: () => void;
   onTriggerWorkflow: (
@@ -136,6 +153,7 @@ interface MonthlyReportTabProps {
       | 'create_revision'
   ) => void;
   onOpenAuthModal: () => void;
+  onNavigateToField: (sectionId: string, fieldId: string) => void;
 }
 
 export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
@@ -146,17 +164,23 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
   user,
   dirty,
   saving,
+  savingSignatureTarget = null,
   onChangeReport,
   onSave,
   onSaveSignature,
   onSaveDate,
   onOpenPreview,
+  onExportPdf,
   onExportExcel,
+  exportingPdf = false,
+  exportingExcel = false,
   onOpenHistory,
   onOpenSitesModal,
   onTriggerWorkflow,
   onOpenAuthModal,
+  onNavigateToField,
 }) => {
+  const { confirmDialog, missingDataDialog, notifySuccess } = useNotification();
   const [showInactiveSites, setShowInactiveSites] = useState(false);
   const [maintenanceViewMode, setMaintenanceViewMode] = useState<'table' | 'cards'>('table');
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
@@ -212,22 +236,111 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
   const canSignPreparer =
     report.status !== REPORT_STATUSES.APPROVED &&
     report.status !== REPORT_STATUSES.ARCHIVED &&
-    (!user ||
-      user.role === USER_ROLES.ADMIN ||
+    !!user &&
+    (user.role === USER_ROLES.ADMIN ||
       (user.role === USER_ROLES.PREPARER && report.status === REPORT_STATUSES.DRAFT));
 
+  // STRICT RBAC: Only ADMIN or APPROVER can sign/modify/delete the Approver signature.
   const canSignApprover =
     report.status !== REPORT_STATUSES.APPROVED &&
     report.status !== REPORT_STATUSES.ARCHIVED &&
-    (!user ||
-      user.role === USER_ROLES.ADMIN ||
-      user.role === USER_ROLES.APPROVER ||
-      (user.role === USER_ROLES.PREPARER && report.status === REPORT_STATUSES.DRAFT));
+    !!user &&
+    (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.APPROVER);
+
+  const dualSigEval = useMemo(
+    () =>
+      evaluateDualSignatureApproval(report, user, {
+        savingTarget:
+          savingSignatureTarget ?? (savingSignature ? signatureModal?.target ?? null : null),
+      }),
+    [report, user, savingSignatureTarget, savingSignature, signatureModal?.target]
+  );
+
+  const dataValidation = useMemo(
+    () =>
+      validateReportCompleteness(report, {
+        stage: 'draft_save',
+        sites,
+        categories,
+        user,
+      }),
+    [report, sites, categories, user]
+  );
+
+  const prevCompletionStateRef = useRef<{ reportId: string; dataIsComplete: boolean } | null>(null);
+  useEffect(() => {
+    const prev = prevCompletionStateRef.current;
+    if (!prev || prev.reportId !== report.id) {
+      prevCompletionStateRef.current = {
+        reportId: report.id,
+        dataIsComplete: dataValidation.dataIsComplete,
+      };
+      return;
+    }
+    if (!prev.dataIsComplete && dataValidation.dataIsComplete) {
+      notifySuccess(
+        'اكتملت البيانات المطلوبة للتقرير',
+        'جميع الحقول والبيانات الأساسية مستوفاة وجاهزة لاستكمال التوقيع والاعتماد.',
+        {
+          context: 'saved',
+          dedupeKey: `report_complete_${report.id}`,
+        }
+      );
+    }
+    prevCompletionStateRef.current = {
+      reportId: report.id,
+      dataIsComplete: dataValidation.dataIsComplete,
+    };
+  }, [report.id, dataValidation.dataIsComplete, notifySuccess]);
+
+  const handleOpenSignatureModal = (
+    target: 'preparer' | 'approver',
+    mode: 'draw' | 'upload'
+  ) => {
+    const stage = target === 'preparer' ? 'sign_preparer' : 'sign_approver';
+    const sigValidation = validateReportCompleteness(report, {
+      stage,
+      sites,
+      categories,
+      user,
+      savingTarget: savingSignatureTarget,
+    });
+    if (!sigValidation.isComplete) {
+      void missingDataDialog({
+        reportNumber: report.reportNumber,
+        month: report.month,
+        year: report.year,
+        attemptedActionLabel: STAGE_ACTION_LABELS_AR[stage],
+        validation: sigValidation,
+        onNavigateToField,
+      });
+      return;
+    }
+    setSignatureModal({ target, mode });
+  };
+
+  const handleOpenCompletenessInspector = () => {
+    void missingDataDialog({
+      reportNumber: report.reportNumber,
+      month: report.month,
+      year: report.year,
+      attemptedActionLabel: 'مراجعة اكتمال بيانات التقرير قبل الاعتماد',
+      validation: dataValidation,
+      onNavigateToField,
+    });
+  };
 
   const canManageSites =
     !user || user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.PREPARER;
 
-  const activeStepIdx = WORKFLOW_STEPS.findIndex((s) => s.key === report.status);
+  const normalizedStepStatus =
+    report.status === REPORT_STATUSES.READY_FOR_REVIEW ||
+    report.status === REPORT_STATUSES.UNDER_REVIEW
+      ? REPORT_STATUSES.PENDING_APPROVAL
+      : report.status === REPORT_STATUSES.ARCHIVED
+        ? REPORT_STATUSES.APPROVED
+        : report.status;
+  const activeStepIdx = WORKFLOW_STEPS.findIndex((s) => s.key === normalizedStepStatus);
   const donutData = metrics.servicesWithMetrics.filter((s) => s.receivedCount > 0);
   const sortedRequestsByService = useMemo(
     () => [...metrics.servicesWithMetrics].sort((a, b) => b.receivedCount - a.receivedCount),
@@ -238,16 +351,6 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
     const sb = report.services.find((x) => x.serviceId === b.serviceId)?.summaryOrder ?? 99;
     return sa - sb;
   });
-
-  const siteComparisonData = visibleSites.map((s) => ({
-    name: s.nameAr,
-    faults: metrics.maintenance.siteTotals[s.id] ?? 0,
-  }));
-
-  const logisticsChartData = metrics.logisticsWithPct.map((l) => ({
-    name: l.nameAr,
-    requests: l.requestCount,
-  }));
 
   const maintenanceSourcesChartData = useMemo(() => {
     const fromFacilities = Math.max(0, Number(report.maintenanceServices.fromFacilitiesDept) || 0);
@@ -330,6 +433,10 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
     setNewServiceDraft({ nameAr: '', nameEn: '', receivedCount: 0, executedCount: 0 });
     setServiceFormError(null);
     setShowAddServiceForm(false);
+    notifySuccess('تمت إضافة الخدمة الجديدة إلى التقرير', nameAr, {
+      context: 'saved',
+      dedupeKey: `add_svc_${newId}`,
+    });
   };
 
   const handleStartEditService = (serviceId: string) => {
@@ -352,9 +459,22 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
       ),
     }));
     setEditingServiceId(null);
+    notifySuccess('تم تعديل مسمى الخدمة', nameAr, { context: 'saved' });
   };
 
-  const handleDeleteService = (serviceId: string) => {
+  const handleDeleteService = async (serviceId: string) => {
+    const target = report.services.find((s) => s.serviceId === serviceId);
+    const confirmed = await confirmDialog({
+      title: 'تأكيد حذف الخدمة من التقرير',
+      titleEn: 'Confirm Service Deletion',
+      message: 'هل أنت متأكد من حذف هذه الخدمة؟ سيتم إزالة بياناتها من ملخص الخدمات وتوزيع الأداء.',
+      targetLabel: target?.nameAr || 'الخدمة المحددة',
+      confirmLabel: 'حذف الخدمة',
+      cancelLabel: 'إلغاء',
+      tone: 'danger',
+      context: 'delete',
+    });
+    if (!confirmed) return;
     if (editingServiceId === serviceId) {
       setEditingServiceId(null);
     }
@@ -362,6 +482,9 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
       ...prev,
       services: prev.services.filter((item) => item.serviceId !== serviceId),
     }));
+    notifySuccess('تم حذف الخدمة من المسودة', target?.nameAr || undefined, {
+      context: 'delete',
+    });
   };
 
   const handleAddSecurityCol = () => {
@@ -399,6 +522,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
     setNewSecurityColDraft({ nameAr: '', nameEn: '', receivedCount: 0, executedCount: 0 });
     setSecurityColFormError(null);
     setShowAddSecurityColForm(false);
+    notifySuccess('تمت إضافة عمود البيان بنجاح', nameAr, { context: 'security' });
   };
 
   const handleStartEditSecurityCol = (activityKey: string) => {
@@ -421,9 +545,22 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
       ),
     }));
     setEditingSecurityKey(null);
+    notifySuccess('تم تعديل مسمى البيان', nameAr, { context: 'security' });
   };
 
-  const handleDeleteSecurityCol = (activityKey: string) => {
+  const handleDeleteSecurityCol = async (activityKey: string) => {
+    const target = report.securityReception.find((sr) => sr.activityKey === activityKey);
+    const confirmed = await confirmDialog({
+      title: 'تأكيد حذف عمود البيان',
+      titleEn: 'Confirm Security Column Deletion',
+      message: 'هل أنت متأكد من حذف هذا العمود من جدول خدمات الأمن والاستقبال؟',
+      targetLabel: target?.nameAr || 'البيان المحدد',
+      confirmLabel: 'حذف العمود',
+      cancelLabel: 'إلغاء',
+      tone: 'danger',
+      context: 'delete',
+    });
+    if (!confirmed) return;
     if (editingSecurityKey === activityKey) {
       setEditingSecurityKey(null);
     }
@@ -431,6 +568,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
       ...prev,
       securityReception: prev.securityReception.filter((item) => item.activityKey !== activityKey),
     }));
+    notifySuccess('تم حذف عمود البيان', target?.nameAr || undefined, { context: 'delete' });
   };
 
   // Contract sub-card tint mapping matching Target UI (Gold, Ice-Blue, Mint)
@@ -536,15 +674,32 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           {/* Primary Actions */}
           <div className="flex flex-wrap items-center gap-1.5">
             {canEdit && (
-              <button
-                type="button"
-                disabled={saving}
-                onClick={onSave}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#0B2341] hover:bg-[#1769AA] text-white text-xs font-bold transition-colors disabled:opacity-60 cursor-pointer"
-              >
-                <Save className="w-3.5 h-3.5 text-[#DFC076]" />
-                <span>{saving ? 'جاري الحفظ...' : 'حفظ التقرير'}</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeReport((prev) => populateReportWithSampleData(prev, sites, categories));
+                    notifySuccess(
+                      'تمت تعبئة البيانات النموذجية',
+                      'تم ملء جميع الحقول المخصصة ببيانات عشوائية متناسقة كنموذج جاهز للمراجعة أو التعديل والحفظ.'
+                    );
+                  }}
+                  title="تعبئة جميع الحقول المخصصة ببيانات عشوائية متناسقة كنماذج"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FDF8EC] hover:bg-[#F5E9C8] text-[#0B2341] border border-[#C8A85D] text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[#9A7422]" />
+                  <span>تعبئة بيانات نموذجية</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={onSave}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#0B2341] hover:bg-[#1769AA] text-white text-xs font-bold transition-colors disabled:opacity-60 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5 text-[#DFC076]" />
+                  <span>{saving ? 'جاري الحفظ...' : 'حفظ التقرير'}</span>
+                </button>
+              </>
             )}
 
             {report.status === REPORT_STATUSES.DRAFT &&
@@ -556,60 +711,38 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1769AA] hover:bg-[#0B2341] text-white text-xs font-bold transition-colors cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>تقديم للمراجعة</span>
+                  <span>إرسال للاعتماد</span>
                 </button>
               )}
 
-            {report.status === REPORT_STATUSES.READY_FOR_REVIEW &&
-              user &&
-              (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.REVIEWER) && (
-                <button
-                  type="button"
-                  onClick={() => onTriggerWorkflow('start_review')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1769AA] hover:bg-[#0B2341] text-white text-xs font-bold transition-colors cursor-pointer"
-                >
-                  <ClipboardCheck className="w-3.5 h-3.5" />
-                  <span>بدء المراجعة</span>
-                </button>
-              )}
-
-            {(report.status === REPORT_STATUSES.UNDER_REVIEW ||
-              report.status === REPORT_STATUSES.READY_FOR_REVIEW) &&
-              user &&
-              (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.REVIEWER) && (
-                <button
-                  type="button"
-                  onClick={() => onTriggerWorkflow('forward_approval')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#069B74] hover:bg-[#058261] text-white text-xs font-bold transition-colors cursor-pointer"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>رفع للاعتماد</span>
-                </button>
-              )}
-
-            {report.status === REPORT_STATUSES.PENDING_APPROVAL &&
+            {(report.status === REPORT_STATUSES.PENDING_APPROVAL ||
+              report.status === REPORT_STATUSES.READY_FOR_REVIEW ||
+              report.status === REPORT_STATUSES.UNDER_REVIEW) &&
               user &&
               (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.APPROVER) && (
                 <button
                   type="button"
                   onClick={() => onTriggerWorkflow('approve')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#069B74] hover:bg-[#058261] text-white text-xs font-bold transition-colors cursor-pointer"
+                  title={
+                    dualSigEval.hasBothSignatures
+                      ? 'اعتماد التقرير رسمياً'
+                      : 'يتطلب توقيع معد التقرير وتوقيع معتمد التقرير قبل الاعتماد'
+                  }
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-bold transition-colors cursor-pointer ${
+                    dualSigEval.hasBothSignatures
+                      ? 'bg-[#07976E] hover:bg-[#05805d]'
+                      : 'bg-[#082D56] hover:bg-[#10518C] border border-[#D5AD5D]/70'
+                  }`}
                 >
-                  <ShieldCheck className="w-3.5 h-3.5" />
+                  {dualSigEval.hasBothSignatures ? (
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5 text-[#D5AD5D]" />
+                  )}
                   <span>اعتماد رسمي</span>
-                </button>
-              )}
-
-            {report.status === REPORT_STATUSES.APPROVED &&
-              user &&
-              (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.APPROVER) && (
-                <button
-                  type="button"
-                  onClick={() => onTriggerWorkflow('archive')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0B2341] hover:bg-[#1769AA] text-white text-xs font-bold transition-colors cursor-pointer"
-                >
-                  <Archive className="w-3.5 h-3.5" />
-                  <span>أرشفة</span>
+                  {!dualSigEval.hasBothSignatures && (
+                    <span className="text-[10px] text-[#E5C878] font-semibold">(يتطلب التوقيعين)</span>
+                  )}
                 </button>
               )}
 
@@ -648,14 +781,101 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               <span>معاينة / طباعة</span>
             </button>
 
+            {onExportPdf && (
+              <button
+                type="button"
+                onClick={onExportPdf}
+                disabled={exportingPdf}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#C99E4A] hover:bg-[#b58a37] disabled:opacity-60 text-[#0B2341] text-xs font-extrabold transition-colors cursor-pointer"
+              >
+                {exportingPdf ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <FileText className="w-3.5 h-3.5" />
+                )}
+                <span>{exportingPdf ? 'جارٍ إنشاء PDF...' : 'تصدير PDF'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onExportExcel}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#069B74] hover:bg-[#058261] text-white text-xs font-bold transition-colors cursor-pointer"
+              disabled={exportingExcel}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#069B74] hover:bg-[#058261] disabled:opacity-60 text-white text-xs font-bold transition-colors cursor-pointer"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>تصدير Excel</span>
+              {exportingExcel ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+              )}
+              <span>{exportingExcel ? 'جارٍ التصدير...' : 'تصدير Excel'}</span>
             </button>
+          </div>
+        </div>
+
+        {/* Report Completeness Indicator Strip */}
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2.5 px-3 py-1.5 rounded-lg border text-[11px] ${
+            dataValidation.dataIsComplete
+              ? 'bg-emerald-50/75 border-[#07976E]/35 text-[#082D56]'
+              : 'bg-red-50/65 border-[#C94444]/35 text-[#082D56]'
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-extrabold text-white ${
+                dataValidation.dataIsComplete ? 'bg-[#07976E]' : 'bg-[#C94444]'
+              }`}
+            >
+              {dataValidation.dataIsComplete ? (
+                <CheckCircle2 className="w-3 h-3" />
+              ) : (
+                <AlertTriangle className="w-3 h-3" />
+              )}
+              <span>{dataValidation.dataIsComplete ? 'مكتمل' : 'غير مكتمل'}</span>
+            </span>
+
+            <span className="font-bold text-[#082D56]">
+              نسبة اكتمال البيانات:{' '}
+              <span dir="ltr" className="font-extrabold tabular-nums">
+                {formatNumber(dataValidation.completenessPercentage)}%
+              </span>
+            </span>
+
+            <div
+              className="w-28 h-2 rounded-full bg-white border border-slate-200 overflow-hidden"
+              aria-hidden="true"
+            >
+              <div
+                className={`h-full transition-all duration-300 ${
+                  dataValidation.dataIsComplete ? 'bg-[#07976E]' : 'bg-[#D99A22]'
+                }`}
+                style={{ width: `${dataValidation.completenessPercentage}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {dataValidation.dataIsComplete ? (
+              <span className="text-[11px] font-bold text-[#07976E]">
+                جميع الحقول المطلوبة مستوفاة وجاهزة للمراجعة والاعتماد
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenCompletenessInspector}
+                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-white hover:bg-red-50 border border-[#C94444]/40 text-[#C94444] font-extrabold transition-colors cursor-pointer"
+              >
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  الحقول الناقصة:{' '}
+                  <span dir="ltr" className="tabular-nums">
+                    {formatNumber(dataValidation.missingRequiredFields)}
+                  </span>{' '}
+                  (عرض الحقول)
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -686,97 +906,190 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
         icon={<ClipboardList className="w-4 h-4" />}
         bodyClassName="p-3 sm:p-4"
       >
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
-          {/* 4 Gradient KPI Cards (Right / 9 Cols — exact sampled gradients from MASTER_VISUAL_REFERENCE) */}
-          <div className="lg:col-span-9 grid grid-cols-2 md:grid-cols-4 gap-3">
-            {/* KPI 1 (Rightmost): Total Requests */}
-            <div className="rounded-xl border border-[#B8CEE8] bg-gradient-to-b from-[#F4F8FD] via-[#EBF2FC] to-[#DFEAFA] p-3.5 flex flex-col items-center justify-center text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="w-10 h-10 rounded-xl bg-white/85 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-2 shadow-2xs">
-                <ClipboardList className="w-5 h-5" />
-              </div>
-              <p
-                className="text-2xl sm:text-[28px] font-extrabold text-[#012E5E] tabular-nums leading-none"
-                dir="ltr"
-              >
-                {formatNumber(metrics.totalReceived)}
-              </p>
-              <p className="text-xs font-extrabold text-[#012E5E] mt-2">إجمالي الطلبات</p>
-              <p className="text-[10.5px] font-medium text-slate-600" dir="ltr">
-                Total Requests
-              </p>
-            </div>
+        {(() => {
+          const topServiceImg = resolveTopServiceKpiImage(metrics.topService);
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
+              {/* 4 Gradient KPI Cards with Contextual Corporate Imagery (Right / 9 Cols) */}
+              <div className="lg:col-span-9 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
+                {/* KPI 1 (Rightmost): Total Requests */}
+                <div className="group rounded-xl border border-[#B8CEE8] bg-gradient-to-b from-[#F4F8FD] via-[#EBF2FC] to-[#DFEAFA] overflow-hidden flex flex-col justify-between text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                  <div className="relative h-[94px] sm:h-[104px] w-full overflow-hidden bg-[#D8E8FA] shrink-0">
+                    <img
+                      src={EXECUTIVE_KPI_IMAGES.totalRequests.src}
+                      alt={EXECUTIVE_KPI_IMAGES.totalRequests.altAr}
+                      className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-gradient-to-b from-[#012E5E]/15 via-transparent to-[#EBF2FC]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#EBF2FC] via-[#EBF2FC]/80 to-transparent"
+                    />
+                  </div>
+                  <div className="px-3 pb-3.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                    <div className="-mt-5 relative z-10 w-10 h-10 rounded-xl bg-white/95 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-1.5 shadow-xs shrink-0">
+                      <ClipboardList className="w-5 h-5" />
+                    </div>
+                    <div className="my-auto py-0.5 flex flex-col items-center justify-center">
+                      <p
+                        className="text-2xl sm:text-[28px] font-extrabold text-[#012E5E] tabular-nums leading-none"
+                        dir="ltr"
+                      >
+                        {formatNumber(metrics.totalReceived)}
+                      </p>
+                    </div>
+                    <div className="mt-1.5">
+                      <p className="text-xs font-extrabold text-[#012E5E]">إجمالي الطلبات</p>
+                      <p className="text-[10.5px] font-medium text-slate-600 mt-0.5" dir="ltr">
+                        Total Requests
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-            {/* KPI 2: Top Service Demand / Key Observations */}
-            <div className="rounded-xl border border-[#E2C88B] bg-gradient-to-b from-[#FDF9EE] via-[#F9F0DA] to-[#F3E5C2] p-3.5 flex flex-col items-center justify-center text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="w-10 h-10 rounded-xl bg-white/85 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-2 shadow-2xs">
-                <Award className="w-5 h-5" />
-              </div>
-              {metrics.topService ? (
-                <p className="text-sm font-extrabold text-[#012E5E] leading-snug line-clamp-2 min-h-[28px] flex items-center">
-                  {metrics.topService.nameAr}
-                </p>
-              ) : (
-                <p className="text-2xl font-extrabold text-[#9A7422] leading-none" dir="ltr">
-                  0
-                </p>
-              )}
-              <p className="text-xs font-extrabold text-[#012E5E] mt-2">أعلى خدمة طلباً</p>
-              <p className="text-[10.5px] font-medium text-slate-600">
-                {metrics.topService
-                  ? `${formatNumber(metrics.topService.receivedCount)} طلب · Top Service`
-                  : 'Key Observations'}
-              </p>
-            </div>
+                {/* KPI 2: Top Service Demand (Dynamic Image by serviceId) */}
+                <div className="group rounded-xl border border-[#E2C88B] bg-gradient-to-b from-[#FDF9EE] via-[#F9F0DA] to-[#F3E5C2] overflow-hidden flex flex-col justify-between text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                  <div className="relative h-[94px] sm:h-[104px] w-full overflow-hidden bg-[#F3E5C2] shrink-0">
+                    <img
+                      src={topServiceImg.src}
+                      alt={topServiceImg.altAr}
+                      className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-gradient-to-b from-[#5A4010]/15 via-transparent to-[#F9F0DA]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#F9F0DA] via-[#F9F0DA]/80 to-transparent"
+                    />
+                  </div>
+                  <div className="px-3 pb-3.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                    <div className="-mt-5 relative z-10 w-10 h-10 rounded-xl bg-white/95 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-1.5 shadow-xs shrink-0">
+                      <Award className="w-5 h-5" />
+                    </div>
+                    <div className="my-auto py-0.5 flex flex-col items-center justify-center min-h-[32px]">
+                      {metrics.topService ? (
+                        <p className="text-sm font-extrabold text-[#012E5E] leading-snug line-clamp-2 flex items-center justify-center">
+                          {metrics.topService.nameAr}
+                        </p>
+                      ) : (
+                        <p className="text-2xl font-extrabold text-[#9A7422] leading-none" dir="ltr">
+                          0
+                        </p>
+                      )}
+                    </div>
+                    <div className="mt-1.5">
+                      <p className="text-xs font-extrabold text-[#012E5E]">أعلى خدمة طلباً</p>
+                      <p className="text-[10.5px] font-medium text-slate-600 mt-0.5">
+                        {metrics.topService
+                          ? `${formatNumber(metrics.topService.receivedCount)} طلب · Top Service`
+                          : 'Top Service'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-            {/* KPI 3: Total Services */}
-            <div className="rounded-xl border border-[#A5C8EB] bg-gradient-to-b from-[#F0F7FE] via-[#E4F0FC] to-[#D5E7FA] p-3.5 flex flex-col items-center justify-center text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="w-10 h-10 rounded-xl bg-white/85 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-2 shadow-2xs">
-                <Layers className="w-5 h-5" />
-              </div>
-              <p
-                className="text-2xl sm:text-[28px] font-extrabold text-[#012E5E] tabular-nums leading-none"
-                dir="ltr"
-              >
-                {formatNumber(metrics.activeServicesCount)}
-              </p>
-              <p className="text-xs font-extrabold text-[#012E5E] mt-2">إجمالي الخدمات</p>
-              <p className="text-[10.5px] font-medium text-slate-600" dir="ltr">
-                Total Services
-              </p>
-            </div>
+                {/* KPI 3: Total Services */}
+                <div className="group rounded-xl border border-[#A5C8EB] bg-gradient-to-b from-[#F0F7FE] via-[#E4F0FC] to-[#D5E7FA] overflow-hidden flex flex-col justify-between text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                  <div className="relative h-[94px] sm:h-[104px] w-full overflow-hidden bg-[#D5E7FA] shrink-0">
+                    <img
+                      src={EXECUTIVE_KPI_IMAGES.totalServices.src}
+                      alt={EXECUTIVE_KPI_IMAGES.totalServices.altAr}
+                      className="w-full h-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-gradient-to-b from-[#0C4176]/15 via-transparent to-[#E4F0FC]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#E4F0FC] via-[#E4F0FC]/80 to-transparent"
+                    />
+                  </div>
+                  <div className="px-3 pb-3.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                    <div className="-mt-5 relative z-10 w-10 h-10 rounded-xl bg-white/95 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-1.5 shadow-xs shrink-0">
+                      <Layers className="w-5 h-5" />
+                    </div>
+                    <div className="my-auto py-0.5 flex flex-col items-center justify-center">
+                      <p
+                        className="text-2xl sm:text-[28px] font-extrabold text-[#012E5E] tabular-nums leading-none"
+                        dir="ltr"
+                      >
+                        {formatNumber(metrics.activeServicesCount)}
+                      </p>
+                    </div>
+                    <div className="mt-1.5">
+                      <p className="text-xs font-extrabold text-[#012E5E]">إجمالي الخدمات</p>
+                      <p className="text-[10.5px] font-medium text-slate-600 mt-0.5" dir="ltr">
+                        Total Services
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-            {/* KPI 4 (Next to Photo): Monthly Completion Rate */}
-            <div className="rounded-xl border border-[#9CD9C5] bg-gradient-to-b from-[#EFFBF6] via-[#E1F6ED] to-[#CEEFE1] p-3.5 flex flex-col items-center justify-center text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="w-10 h-10 rounded-xl bg-white/85 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-2 shadow-2xs">
-                <Target className="w-5 h-5" />
+                {/* KPI 4 (Next to Photo): Monthly Completion Rate */}
+                <div className="group rounded-xl border border-[#9CD9C5] bg-gradient-to-b from-[#EFFBF6] via-[#E1F6ED] to-[#CEEFE1] overflow-hidden flex flex-col justify-between text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                  <div className="relative h-[94px] sm:h-[104px] w-full overflow-hidden bg-[#CEEFE1] shrink-0">
+                    <img
+                      src={EXECUTIVE_KPI_IMAGES.monthlyCompletion.src}
+                      alt={EXECUTIVE_KPI_IMAGES.monthlyCompletion.altAr}
+                      className="w-full h-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.03]"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-gradient-to-b from-[#056C51]/12 via-transparent to-[#E1F6ED]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#E1F6ED] via-[#E1F6ED]/80 to-transparent"
+                    />
+                  </div>
+                  <div className="px-3 pb-3.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                    <div className="-mt-5 relative z-10 w-10 h-10 rounded-xl bg-white/95 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-1.5 shadow-xs shrink-0">
+                      <Target className="w-5 h-5" />
+                    </div>
+                    <div className="my-auto py-0.5 flex flex-col items-center justify-center">
+                      <p
+                        className="text-2xl sm:text-[28px] font-extrabold text-[#069B74] tabular-nums leading-none"
+                        dir="ltr"
+                      >
+                        {formatPct(metrics.overallCompletionPct, '0.0%')}
+                      </p>
+                    </div>
+                    <div className="mt-1.5">
+                      <p className="text-xs font-extrabold text-[#012E5E]">نسبة الإنجاز الشهرية</p>
+                      <p className="text-[10.5px] font-medium text-slate-600 mt-0.5" dir="ltr">
+                        Monthly Completion Rate
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <p
-                className="text-2xl sm:text-[28px] font-extrabold text-[#069B74] tabular-nums leading-none"
-                dir="ltr"
-              >
-                {formatPct(metrics.overallCompletionPct, '0.0%')}
-              </p>
-              <p className="text-xs font-extrabold text-[#012E5E] mt-2">نسبة الإنجاز الشهرية</p>
-              <p className="text-[10.5px] font-medium text-slate-600" dir="ltr">
-                Monthly Completion Rate
-              </p>
-            </div>
-          </div>
 
-          {/* Left Visual Support Photo (3 Cols) */}
-          <div className="lg:col-span-3 relative rounded-xl overflow-hidden border border-[#B8CEE6] min-h-[148px] shadow-xs bg-[#0B2341]">
-            <img
-              src={engineerImg}
-              alt="مهندس مرافق يقوم بالتفتيش الميداني عبر الجهاز اللوحي"
-              className="w-full h-full object-cover"
-              referrerPolicy="no-referrer"
-            />
-            <div
-              aria-hidden="true"
-              className="absolute inset-0 bg-gradient-to-t from-[#071D3B]/55 via-transparent to-transparent pointer-events-none"
-            />
-          </div>
-        </div>
+              {/* Left Visual Support Photo (3 Cols) */}
+              <div className="lg:col-span-3 relative rounded-xl overflow-hidden border border-[#B8CEE6] min-h-[180px] shadow-xs bg-[#0B2341]">
+                <img
+                  src={engineerImg}
+                  alt="مهندس مرافق يقوم بالتفتيش الميداني عبر الجهاز اللوحي"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 bg-gradient-to-t from-[#071D3B]/55 via-transparent to-transparent pointer-events-none"
+                />
+              </div>
+            </div>
+          );
+        })()}
       </SectionCard>
 
       {/* ================================================================= */}
@@ -1435,6 +1748,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         {isEditingThis ? (
                           <div className="flex flex-wrap items-center gap-1.5">
                             <input
+                              id={`field-svc-name-${s.serviceId}`}
                               type="text"
                               value={editServiceDraft.nameAr}
                               onChange={(e) =>
@@ -1471,7 +1785,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                             />
                           </div>
                         ) : (
-                          <div className="flex items-center gap-2">
+                          <div id={`field-svc-name-${s.serviceId}`} className="flex items-center gap-2">
                             <span style={{ color: vis.color }} className="shrink-0">
                               {vis.renderIcon('w-4 h-4')}
                             </span>
@@ -1484,6 +1798,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                           {(s.serviceId === 'svc_reception' && metrics.linkedReception.hasLinkedColumns) ||
                           (isLogisticsServiceRow(s) && report.logistics.length > 0) ? (
                             <output
+                              id={`field-svc-received-${s.serviceId}`}
                               dir="ltr"
                               title="يتم تحديث العدد تلقائياً"
                               className="services-summary-numeric-input services-summary-numeric-box received-input"
@@ -1492,6 +1807,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                             </output>
                           ) : (
                             <NumericInput
+                              id={`field-svc-received-${s.serviceId}`}
                               min={0}
                               disabled={!canEdit}
                               value={s.receivedCount}
@@ -1512,6 +1828,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         <div className="services-summary-cell">
                           {s.serviceId === 'svc_reception' && metrics.linkedReception.hasLinkedColumns ? (
                             <output
+                              id={`field-svc-executed-${s.serviceId}`}
                               dir="ltr"
                               title="يتم تحديث العدد تلقائياً"
                               className="services-summary-numeric-input services-summary-numeric-box completed-input"
@@ -1520,6 +1837,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                             </output>
                           ) : (
                             <NumericInput
+                              id={`field-svc-executed-${s.serviceId}`}
                               min={0}
                               disabled={!canEdit}
                               value={s.executedCount}
@@ -1535,6 +1853,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                             />
                           )}
                         </div>
+                        {s.executedCount > s.receivedCount && (
+                          <span className="block text-[9.5px] font-bold text-[#D99A22] mt-0.5 leading-tight">
+                            تجاوزت المستلمة
+                          </span>
+                        )}
                       </td>
                       <td className="py-1.5 px-3">
                         <div className="h-2.5 bg-slate-200/90 rounded-sm overflow-hidden">
@@ -1669,6 +1992,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                     <div className="grid grid-cols-2 divide-x divide-x-reverse divide-slate-200 text-center">
                       <div className="px-1 py-1">
                         <NumericInput
+                          id={`field-con-active-${con.groupKey}`}
                           min={0}
                           disabled={!canEdit}
                           ariaLabel={`${con.nameAr} فعالة`}
@@ -1689,6 +2013,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
 
                       <div className="px-1 py-1">
                         <NumericInput
+                          id={`field-con-inactive-${con.groupKey}`}
                           min={0}
                           disabled={!canEdit}
                           ariaLabel={`${con.nameAr} غير فعالة`}
@@ -1797,6 +2122,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       <div className="flex-1 grid grid-cols-2 divide-x divide-x-reverse divide-slate-200 text-center">
                         <div className="px-1.5 py-1 flex flex-col items-center justify-center">
                           <NumericInput
+                            id={`field-safety-primary-${sf.groupKey}`}
                             min={0}
                             disabled={!canEdit}
                             ariaLabel={`${sf.nameAr} ${sf.primaryLabelAr}`}
@@ -1821,6 +2147,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
 
                         <div className="px-1.5 py-1 flex flex-col items-center justify-center">
                           <NumericInput
+                            id={`field-safety-secondary-${sf.groupKey}`}
                             min={0}
                             disabled={!canEdit}
                             ariaLabel={`${sf.nameAr} ${sf.secondaryLabelAr}`}
@@ -2052,6 +2379,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                               className="py-1 px-0.5 text-center align-middle border-l border-slate-200/70"
                             >
                               <NumericInput
+                                id={`field-maint-${site.id}-${cat.id}`}
                                 min={0}
                                 disabled={!canEdit}
                                 value={val}
@@ -2123,6 +2451,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                           className="py-1 px-0.5 text-center align-middle border-l border-slate-200/70"
                         >
                           <NumericInput
+                            id={`field-cost-petty-${cat.id}`}
                             decimal
                             min={0}
                             disabled={!canEdit}
@@ -2172,6 +2501,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                           className="py-1 px-0.5 text-center align-middle border-l border-slate-200/70"
                         >
                           <NumericInput
+                            id={`field-cost-po-${cat.id}`}
                             decimal
                             min={0}
                             disabled={!canEdit}
@@ -2251,6 +2581,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         </span>
                         <div className="w-16 shrink-0">
                           <NumericInput
+                            data-field-id={`field-maint-${site.id}-${cat.id}`}
                             min={0}
                             disabled={!canEdit}
                             value={val}
@@ -2301,6 +2632,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         <span className="text-[10.5px] text-slate-500">نثرية:</span>
                         <div className="w-18">
                           <NumericInput
+                            data-field-id={`field-cost-petty-${cat.id}`}
                             decimal
                             min={0}
                             disabled={!canEdit}
@@ -2326,6 +2658,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         <span className="text-[10.5px] text-slate-500">أمر شراء:</span>
                         <div className="w-18">
                           <NumericInput
+                            data-field-id={`field-cost-po-${cat.id}`}
                             decimal
                             min={0}
                             disabled={!canEdit}
@@ -2355,34 +2688,19 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           </div>
         </div>
 
-        {/* Site Faults Bar Chart */}
-        <div className="bg-[#F8FAFC] rounded-xl border border-slate-200 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <h3 className="text-xs sm:text-sm font-extrabold text-[#0B2341]">مقارنة الأعطال بين المقرات</h3>
-            <span className="text-xs font-bold text-[#1769AA]" dir="ltr">
-              إجمالي التكلفة المالية: {formatAed(metrics.maintenance.grandTotalCostAed)}
-            </span>
-          </div>
-          <div className="w-full h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={siteComparisonData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#0B2341' }} />
-                <YAxis
-                  allowDecimals={false}
-                  tick={{ fontSize: 11, fill: '#475569' }}
-                  tickFormatter={(v) => formatNumber(Number(v))}
-                />
-                <Tooltip formatter={(v) => [`${formatNumber(Number(v ?? 0))} عطل`, 'عدد الأعطال']} />
-                <Bar dataKey="faults" fill="#1769AA" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        {/* Site Faults Executive Horizontal Comparison Chart */}
+        <MaintenanceSiteHorizontalChart
+          sites={visibleSites}
+          categories={categories}
+          siteTotals={metrics.maintenance.siteTotals}
+          maintenanceMatrix={report.maintenanceMatrix}
+          grandTotalFaults={metrics.maintenance.grandTotalFaults}
+          grandTotalCostAed={metrics.maintenance.grandTotalCostAed}
+        />
       </SectionCard>
 
       {/* SECTION 7 & 8: Logistics (Visual RIGHT in RTL) + Maintenance Services (Visual LEFT in RTL) */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-stretch">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
         {/* SECTION 8 (Visual RIGHT in RTL): Logistics */}
         <SectionCard
           id="sec-logistics"
@@ -2390,7 +2708,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           titleEn="Logistics Channels"
           icon={<Truck className="w-4 h-4" />}
           className="xl:col-span-7"
-          bodyClassName="p-4 space-y-4"
+          bodyClassName="p-4 space-y-3"
         >
           <div className="overflow-x-auto border border-slate-200 rounded-xl">
             <table className="w-full text-xs min-w-[520px]">
@@ -2411,6 +2729,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   {report.logistics.map((ch) => (
                     <td key={ch.channelKey} className="py-1.5 px-1.5 text-center">
                       <NumericInput
+                        id={`field-log-${ch.channelKey}`}
                         min={0}
                         disabled={!canEdit}
                         value={ch.requestCount}
@@ -2445,28 +2764,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             </table>
           </div>
 
-          <div className="bg-[#F8FAFC] rounded-xl border border-slate-200 p-3 h-44">
-            {metrics.logisticsTotal > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={logisticsChartData} margin={{ top: 8, right: 10, left: 10, bottom: 2 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#0B2341' }} />
-                  <YAxis
-                    allowDecimals={false}
-                    tick={{ fontSize: 11 }}
-                    tickFormatter={(v) => formatNumber(Number(v))}
-                  />
-                  <Tooltip formatter={(v) => [`${formatNumber(Number(v ?? 0))} طلب`, 'العدد']} />
-                  <Bar dataKey="requests" fill="#069B74" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-center text-xs text-slate-400">
-                <Truck className="w-7 h-7 text-slate-300 mb-1.5" />
-                <p>أدخل أعداد الطلبات اللوجستية لعرض توزيع القنوات بيانياً</p>
-              </div>
-            )}
-          </div>
+          <LogisticsHorizontalChart channels={report.logistics} />
         </SectionCard>
 
         {/* SECTION 7 (Visual LEFT in RTL): Maintenance Services */}
@@ -2497,6 +2795,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   </td>
                   <td className="py-2 px-3 text-center">
                     <NumericInput
+                      id="field-maint-svc-facilities"
                       min={0}
                       disabled={!canEdit}
                       value={report.maintenanceServices.fromFacilitiesDept}
@@ -2519,6 +2818,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   </td>
                   <td className="py-2 px-3 text-center">
                     <NumericInput
+                      id="field-maint-svc-other"
                       min={0}
                       disabled={!canEdit}
                       value={report.maintenanceServices.fromOtherDepts}
@@ -2860,6 +3160,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   {report.securityReception.map((sr) => (
                     <td key={sr.activityKey} className="py-2 px-1.5 text-center">
                       <NumericInput
+                        id={`field-sec-received-${sr.activityKey}`}
                         min={0}
                         disabled={!canEdit}
                         value={sr.receivedCount}
@@ -2886,6 +3187,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   {report.securityReception.map((sr) => (
                     <td key={sr.activityKey} className="py-2 px-1.5 text-center">
                       <NumericInput
+                        id={`field-sec-executed-${sr.activityKey}`}
                         min={0}
                         disabled={!canEdit}
                         value={sr.executedCount}
@@ -2899,6 +3201,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         }}
                         className="w-16 px-1.5 py-1 rounded border border-slate-200 bg-[#EEF5FC]/70 text-center font-extrabold focus:border-[#069B74] focus:outline-none disabled:bg-slate-50"
                       />
+                      {sr.executedCount > sr.receivedCount && (
+                        <span className="block text-[9.5px] font-bold text-[#D99A22] mt-0.5">
+                          تجاوزت المستلمة
+                        </span>
+                      )}
                     </td>
                   ))}
                   <td className="py-2.5 px-3 text-center font-extrabold tabular-nums bg-slate-50 text-[#069B74]" dir="ltr">
@@ -2934,7 +3241,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           canEdit && (
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
                 onChangeReport((prev) => ({
                   ...prev,
                   tasks: [
@@ -2948,8 +3255,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       completionPct: 0,
                     },
                   ],
-                }))
-              }
+                }));
+                notifySuccess('تمت إضافة صف مهمة جديد', 'يمكنك إدخال تفاصيل المهمة ونسبة الإنجاز الآن.', {
+                  context: 'saved',
+                });
+              }}
               className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#DFC076] hover:bg-[#e8ce8c] text-[#071C3A] text-[11px] font-extrabold cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -2964,8 +3274,8 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             <thead className="bg-[#DCE9F6] text-[#0B2341] border-b border-slate-200">
               <tr>
                 <th className="py-2.5 px-3 text-center w-12 font-extrabold">#</th>
-                <th className="py-2.5 px-3 text-start w-52 font-extrabold">الموضوع</th>
-                <th className="py-2.5 px-3 text-start font-extrabold">المهمة</th>
+                <th className="py-2.5 px-3 text-start w-60 min-w-[200px] max-w-[270px] font-extrabold">الموضوع</th>
+                <th className="py-2.5 px-3 text-start min-w-[230px] font-extrabold">المهمة</th>
                 <th className="py-2.5 px-3 text-center w-36 font-extrabold">الحالة</th>
                 <th className="py-2.5 px-3 text-center w-28 font-extrabold">نسبة الإنجاز</th>
                 <th className="py-2.5 px-3 text-center w-36 font-extrabold">المؤشر</th>
@@ -2980,44 +3290,81 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   (!isEmpty && t.status === TASK_STATUSES.NOT_STARTED && t.completionPct > 0);
 
                 return (
-                  <tr key={t.id} className="hover:bg-[#F4F7FB]">
-                    <td className="py-2 px-3 text-center tabular-nums font-bold text-slate-500" dir="ltr">
+                  <tr key={t.id} className="hover:bg-[#F4F7FB] align-middle">
+                    <td className="py-2 px-3 text-center tabular-nums font-bold text-slate-500 align-middle" dir="ltr">
                       {formatNumber(idx + 1)}
                     </td>
-                    <td className="py-2 px-2">
-                      <input
-                        type="text"
-                        disabled={!canEdit}
-                        value={t.topic}
-                        placeholder="الموضوع..."
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          onChangeReport((prev) => ({
-                            ...prev,
-                            tasks: prev.tasks.map((item) => (item.id === t.id ? { ...item, topic: val } : item)),
-                          }));
-                        }}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs focus:border-[#1769AA] focus:outline-none disabled:bg-slate-50"
-                      />
+                    <td className="py-2 px-2 subject-cell align-middle w-60 min-w-[200px] max-w-[270px]">
+                      <div className="task-auto-wrap-grid">
+                        <div className="task-auto-wrap-mirror font-semibold" aria-hidden="true">
+                          {(t.topic || 'الموضوع...') + '\u200b'}
+                        </div>
+                        <textarea
+                          id={`field-task-topic-${t.id}`}
+                          rows={1}
+                          dir="rtl"
+                          disabled={!canEdit}
+                          value={t.topic}
+                          placeholder="الموضوع..."
+                          onInput={(e) => {
+                            const el = e.currentTarget;
+                            el.style.height = 'auto';
+                            el.style.height = `${Math.max(40, el.scrollHeight)}px`;
+                          }}
+                          ref={(el) => {
+                            if (el) {
+                              el.style.height = 'auto';
+                              el.style.height = `${Math.max(40, el.scrollHeight)}px`;
+                            }
+                          }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            onChangeReport((prev) => ({
+                              ...prev,
+                              tasks: prev.tasks.map((item) => (item.id === t.id ? { ...item, topic: val } : item)),
+                            }));
+                          }}
+                          className="subject-field w-full rounded-lg border border-slate-200 bg-white font-semibold text-[#0B2341] focus:border-[#1769AA] focus:outline-none disabled:bg-slate-50"
+                        />
+                      </div>
                     </td>
-                    <td className="py-2 px-2">
-                      <input
-                        type="text"
-                        disabled={!canEdit}
-                        value={t.taskName}
-                        placeholder="وصف المهمة..."
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          onChangeReport((prev) => ({
-                            ...prev,
-                            tasks: prev.tasks.map((item) => (item.id === t.id ? { ...item, taskName: val } : item)),
-                          }));
-                        }}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs focus:border-[#1769AA] focus:outline-none disabled:bg-slate-50"
-                      />
+                    <td className="py-2 px-2 subject-cell align-middle min-w-[230px]">
+                      <div className="task-auto-wrap-grid">
+                        <div className="task-auto-wrap-mirror" aria-hidden="true">
+                          {(t.taskName || 'وصف المهمة...') + '\u200b'}
+                        </div>
+                        <textarea
+                          id={`field-task-name-${t.id}`}
+                          rows={1}
+                          dir="rtl"
+                          disabled={!canEdit}
+                          value={t.taskName}
+                          placeholder="وصف المهمة..."
+                          onInput={(e) => {
+                            const el = e.currentTarget;
+                            el.style.height = 'auto';
+                            el.style.height = `${Math.max(40, el.scrollHeight)}px`;
+                          }}
+                          ref={(el) => {
+                            if (el) {
+                              el.style.height = 'auto';
+                              el.style.height = `${Math.max(40, el.scrollHeight)}px`;
+                            }
+                          }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            onChangeReport((prev) => ({
+                              ...prev,
+                              tasks: prev.tasks.map((item) => (item.id === t.id ? { ...item, taskName: val } : item)),
+                            }));
+                          }}
+                          className="subject-field w-full rounded-lg border border-slate-200 bg-white text-[#0B2341] focus:border-[#1769AA] focus:outline-none disabled:bg-slate-50"
+                        />
+                      </div>
                     </td>
-                    <td className="py-2 px-2 text-center">
+                    <td className="py-2 px-2 text-center align-middle">
                       <select
+                        id={`field-task-status-${t.id}`}
                         disabled={!canEdit}
                         value={t.status}
                         onChange={(e) => {
@@ -3048,9 +3395,10 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         ))}
                       </select>
                     </td>
-                    <td className="py-2 px-2 text-center">
+                    <td className="py-2 px-2 text-center align-middle">
                       <div className="flex items-center justify-center gap-1">
                         <NumericInput
+                          id={`field-task-pct-${t.id}`}
                           min={0}
                           max={100}
                           disabled={!canEdit}
@@ -3081,7 +3429,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         <span className="text-[10px] text-[#C43D47] block mt-0.5">غير متسق مع الحالة</span>
                       )}
                     </td>
-                    <td className="py-2 px-3">
+                    <td className="py-2 px-3 align-middle">
                       <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
                         <div
                           className={`h-full transition-all ${
@@ -3096,15 +3444,27 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       </div>
                     </td>
                     {canEdit && (
-                      <td className="py-2 px-2 text-center">
+                      <td className="py-2 px-2 text-center align-middle">
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={async () => {
+                            const ok = await confirmDialog({
+                              title: 'تأكيد حذف المهمة',
+                              titleEn: 'Confirm Task Deletion',
+                              message: 'هل أنت متأكد من حذف هذه المهمة من جدول المتابعة؟',
+                              targetLabel: t.topic || t.taskName || `مهمة #${formatNumber(idx + 1)}`,
+                              confirmLabel: 'حذف المهمة',
+                              cancelLabel: 'إلغاء',
+                              tone: 'danger',
+                              context: 'delete',
+                            });
+                            if (!ok) return;
                             onChangeReport((prev) => ({
                               ...prev,
                               tasks: prev.tasks.filter((item) => item.id !== t.id),
-                            }))
-                          }
+                            }));
+                            notifySuccess('تم حذف المهمة من المسودة', undefined, { context: 'delete' });
+                          }}
                           className="p-1.5 text-slate-400 hover:text-[#C43D47] cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -3129,7 +3489,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           canEdit && (
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
                 onChangeReport((prev) => ({
                   ...prev,
                   challenges: [
@@ -3142,8 +3502,9 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       recommendationText: '',
                     },
                   ],
-                }))
-              }
+                }));
+                notifySuccess('تمت إضافة بند تحدٍ وتوصية جديد', undefined, { context: 'saved' });
+              }}
               className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#DFC076] hover:bg-[#e8ce8c] text-[#071C3A] text-[11px] font-extrabold cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -3160,12 +3521,24 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               {canEdit && report.challenges.length > 1 && (
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={async () => {
+                    const ok = await confirmDialog({
+                      title: 'تأكيد حذف البند',
+                      titleEn: 'Confirm Challenge Deletion',
+                      message: 'هل أنت متأكد من حذف بند التحدي والتوصية المحدد؟',
+                      targetLabel: `بند #${formatNumber(idx + 1)}`,
+                      confirmLabel: 'حذف البند',
+                      cancelLabel: 'إلغاء',
+                      tone: 'danger',
+                      context: 'delete',
+                    });
+                    if (!ok) return;
                     onChangeReport((prev) => ({
                       ...prev,
                       challenges: prev.challenges.filter((item) => item.id !== ch.id),
-                    }))
-                  }
+                    }));
+                    notifySuccess('تم حذف البند بنجاح', undefined, { context: 'delete' });
+                  }}
                   className="flex items-center gap-1 text-xs text-[#C43D47] hover:underline cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -3178,6 +3551,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               <div>
                 <label className="block text-xs font-bold text-[#0B2341] mb-1">التحديات والعوائق</label>
                 <textarea
+                  id={`field-chal-text-${ch.id}`}
                   rows={3}
                   disabled={!canEdit}
                   value={ch.challengeText}
@@ -3198,6 +3572,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               <div>
                 <label className="block text-xs font-bold text-[#0B2341] mb-1">التحديث والإجراءات المتخذة</label>
                 <textarea
+                  id={`field-chal-update-${ch.id}`}
                   rows={3}
                   disabled={!canEdit}
                   value={ch.updateText}
@@ -3218,6 +3593,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               <div>
                 <label className="block text-xs font-bold text-[#1769AA] mb-1">التوصية التنفيذية</label>
                 <textarea
+                  id={`field-chal-rec-${ch.id}`}
                   rows={3}
                   disabled={!canEdit}
                   value={ch.recommendationText}
@@ -3275,8 +3651,9 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             <div className="p-4 space-y-3 text-xs flex-1 flex flex-col justify-between">
               <div className="space-y-3">
                 <div>
-                  <label className="block font-bold text-[#012E5E] mb-1">اسم المعد</label>
+                  <label htmlFor="field-preparer-name" className="block font-bold text-[#012E5E] mb-1">اسم المعد</label>
                   <input
+                    id="field-preparer-name"
                     type="text"
                     disabled={!canEdit}
                     value={report.preparerName}
@@ -3287,8 +3664,9 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-[#012E5E] mb-1">المنصب / المسمى الوظيفي</label>
+                  <label htmlFor="field-preparer-title" className="block font-bold text-[#012E5E] mb-1">المنصب / المسمى الوظيفي</label>
                   <input
+                    id="field-preparer-title"
                     type="text"
                     disabled={!canEdit}
                     value={report.preparerTitle}
@@ -3339,16 +3717,39 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
 
                 {/* Preparer Visual Signature Block (Draw or Upload) */}
                 <div className="pt-2 border-t border-slate-200/80 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-bold text-[#012E5E]">التوقيع الإلكتروني · Official Signature</span>
-                    {report.preparerSignatureImage && (
-                      <span className="text-[11px] font-semibold text-[#069B74]">
-                        ✓ توقيع معتمد · جاهز للطباعة
+                    {dualSigEval.preparer.state === 'completed' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[11px] font-extrabold text-[#07976E]">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>{dualSigEval.preparer.labelAr}</span>
+                      </span>
+                    ) : dualSigEval.preparer.state === 'saving' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[11px] font-extrabold text-[#9A7422]">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>{dualSigEval.preparer.labelAr}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 border border-[#C94444]/30 text-[11px] font-extrabold text-[#C94444]">
+                        <XCircle className="w-3 h-3" />
+                        <span>{dualSigEval.preparer.labelAr}</span>
                       </span>
                     )}
                   </div>
 
-                  <div className="relative h-28 rounded-xl border border-dashed border-[#A3C0DE] bg-white flex items-center justify-center p-2 overflow-hidden">
+                  {dualSigEval.preparer.signedAt && dualSigEval.hasValidPreparerSignature && (
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] text-slate-500 bg-white/80 rounded-md px-2.5 py-1 border border-slate-200/70">
+                      <span>تاريخ وتوقيت التوقيع:</span>
+                      <span dir="ltr" className="font-mono font-bold text-[#082D56] tabular-nums">
+                        {formatDateTimeWestern(dualSigEval.preparer.signedAt)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div
+                    id="field-preparer-signature-area"
+                    className="relative h-28 rounded-xl border border-dashed border-[#A3C0DE] bg-white flex items-center justify-center p-2 overflow-hidden"
+                  >
                     <div
                       aria-hidden="true"
                       className="absolute inset-x-8 bottom-4 border-b border-slate-200 pointer-events-none"
@@ -3370,7 +3771,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setSignatureModal({ target: 'preparer', mode: 'draw' })}
+                        onClick={() => handleOpenSignatureModal('preparer', 'draw')}
                         className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#012E5E] hover:bg-[#0B3969] text-white text-[11px] font-bold transition-colors cursor-pointer"
                       >
                         <PenTool className="w-3.5 h-3.5 text-[#DFC076]" />
@@ -3378,7 +3779,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSignatureModal({ target: 'preparer', mode: 'upload' })}
+                        onClick={() => handleOpenSignatureModal('preparer', 'upload')}
                         className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-[#EEF4FA] text-[#012E5E] border border-[#A3C0DE] text-[11px] font-bold transition-colors cursor-pointer"
                       >
                         <ImagePlus className="w-3.5 h-3.5 text-[#1769AA]" />
@@ -3387,7 +3788,20 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       {report.preparerSignatureImage && (
                         <button
                           type="button"
-                          onClick={() => onSaveSignature('preparer', null)}
+                          onClick={async () => {
+                            const ok = await confirmDialog({
+                              title: 'تأكيد حذف توقيع معد التقرير',
+                              titleEn: 'Confirm Signature Removal',
+                              message: 'سيتم إزالة صورة التوقيع الإلكتروني المحفوظة لمعد التقرير.',
+                              targetLabel: report.preparerName || 'معد التقرير',
+                              confirmLabel: 'حذف التوقيع',
+                              cancelLabel: 'إلغاء',
+                              tone: 'danger',
+                              context: 'delete',
+                              onConfirmAsync: () => onSaveSignature('preparer', null),
+                            });
+                            void ok;
+                          }}
                           title="حذف التوقيع"
                           className="px-2.5 py-2 rounded-lg border border-red-200 bg-white hover:bg-red-50 text-[#C43D47] text-[11px] font-bold transition-colors cursor-pointer"
                           aria-label="حذف توقيع معد التقرير"
@@ -3404,7 +3818,14 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                     >
                       تسجيل الدخول لإضافة توقيع معد التقرير
                     </button>
-                  ) : null}
+                  ) : (
+                    !isApprovedOrArchived && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-[10.5px] font-semibold text-slate-600">
+                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>تعديل توقيع معد التقرير متاح لمعد التقرير في مرحلة المسودة أو لمدير النظام.</span>
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
 
@@ -3420,6 +3841,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   <span>{saving ? 'جاري الحفظ...' : 'حفظ المسودة'}</span>
                 </button>
                 <button
+                  id="field-preparer-submit-btn"
                   type="button"
                   disabled={report.status !== REPORT_STATUSES.DRAFT}
                   onClick={() => onTriggerWorkflow('submit_review')}
@@ -3459,10 +3881,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             <div className="p-4 space-y-3 text-xs flex-1 flex flex-col justify-between">
               <div className="space-y-3">
                 <div>
-                  <label className="block font-bold text-[#012E5E] mb-1">اسم المعتمد</label>
+                  <label htmlFor="field-approver-name" className="block font-bold text-[#012E5E] mb-1">اسم المعتمد</label>
                   <input
+                    id="field-approver-name"
                     type="text"
-                    disabled={!canEdit}
+                    disabled={!canEdit && !canSignApprover}
                     value={report.approverName}
                     onChange={(e) =>
                       onChangeReport((prev) => ({ ...prev, approverName: e.target.value }))
@@ -3471,10 +3894,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-[#012E5E] mb-1">المنصب / المسمى الوظيفي</label>
+                  <label htmlFor="field-approver-title" className="block font-bold text-[#012E5E] mb-1">المنصب / المسمى الوظيفي</label>
                   <input
+                    id="field-approver-title"
                     type="text"
-                    disabled={!canEdit}
+                    disabled={!canEdit && !canSignApprover}
                     value={report.approverTitle}
                     onChange={(e) =>
                       onChangeReport((prev) => ({ ...prev, approverTitle: e.target.value }))
@@ -3523,16 +3947,39 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
 
                 {/* Approver Visual Signature Block (Draw or Upload) */}
                 <div className="pt-2 border-t border-slate-200/80 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-bold text-[#012E5E]">التوقيع الإلكتروني · Official Signature</span>
-                    {report.approverSignatureImage && (
-                      <span className="text-[11px] font-semibold text-[#069B74]">
-                        ✓ تم الاعتماد · جاهز للطباعة
+                    {dualSigEval.approver.state === 'completed' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[11px] font-extrabold text-[#07976E]">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>{dualSigEval.approver.labelAr}</span>
+                      </span>
+                    ) : dualSigEval.approver.state === 'saving' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[11px] font-extrabold text-[#9A7422]">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>{dualSigEval.approver.labelAr}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 border border-[#C94444]/30 text-[11px] font-extrabold text-[#C94444]">
+                        <XCircle className="w-3 h-3" />
+                        <span>{dualSigEval.approver.labelAr}</span>
                       </span>
                     )}
                   </div>
 
-                  <div className="relative h-28 rounded-xl border border-dashed border-[#A3C0DE] bg-white flex items-center justify-center p-2 overflow-hidden">
+                  {dualSigEval.approver.signedAt && dualSigEval.hasValidApproverSignature && (
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] text-slate-500 bg-white/80 rounded-md px-2.5 py-1 border border-slate-200/70">
+                      <span>تاريخ وتوقيت التوقيع:</span>
+                      <span dir="ltr" className="font-mono font-bold text-[#082D56] tabular-nums">
+                        {formatDateTimeWestern(dualSigEval.approver.signedAt)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div
+                    id="field-approver-signature-area"
+                    className="relative h-28 rounded-xl border border-dashed border-[#A3C0DE] bg-white flex items-center justify-center p-2 overflow-hidden"
+                  >
                     <div
                       aria-hidden="true"
                       className="absolute inset-x-8 bottom-4 border-b border-slate-200 pointer-events-none"
@@ -3554,7 +4001,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setSignatureModal({ target: 'approver', mode: 'draw' })}
+                        onClick={() => handleOpenSignatureModal('approver', 'draw')}
                         className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#012E5E] hover:bg-[#0B3969] text-white text-[11px] font-bold transition-colors cursor-pointer"
                       >
                         <PenTool className="w-3.5 h-3.5 text-[#DFC076]" />
@@ -3562,7 +4009,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSignatureModal({ target: 'approver', mode: 'upload' })}
+                        onClick={() => handleOpenSignatureModal('approver', 'upload')}
                         className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-[#EEF4FA] text-[#012E5E] border border-[#A3C0DE] text-[11px] font-bold transition-colors cursor-pointer"
                       >
                         <ImagePlus className="w-3.5 h-3.5 text-[#1769AA]" />
@@ -3571,7 +4018,20 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       {report.approverSignatureImage && (
                         <button
                           type="button"
-                          onClick={() => onSaveSignature('approver', null)}
+                          onClick={async () => {
+                            const ok = await confirmDialog({
+                              title: 'تأكيد حذف توقيع المعتمد الرسمي',
+                              titleEn: 'Confirm Approver Signature Removal',
+                              message: 'سيتم إزالة صورة التوقيع الإلكتروني المحفوظة لصاحب الاعتماد.',
+                              targetLabel: report.approverName || 'معتمد التقرير',
+                              confirmLabel: 'حذف التوقيع',
+                              cancelLabel: 'إلغاء',
+                              tone: 'danger',
+                              context: 'delete',
+                              onConfirmAsync: () => onSaveSignature('approver', null),
+                            });
+                            void ok;
+                          }}
                           title="حذف التوقيع"
                           className="px-2.5 py-2 rounded-lg border border-red-200 bg-white hover:bg-red-50 text-[#C43D47] text-[11px] font-bold transition-colors cursor-pointer"
                           aria-label="حذف توقيع المعتمد"
@@ -3588,7 +4048,14 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                     >
                       تسجيل الدخول لإضافة توقيع الاعتماد
                     </button>
-                  ) : null}
+                  ) : (
+                    !isApprovedOrArchived && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-[10.5px] font-semibold text-slate-600">
+                        <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>صلاحية إضافة توقيع المعتمد مخصصة لحساب «المعتمد» أو «مدير النظام» فقط.</span>
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
 
@@ -3597,19 +4064,34 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                 <button
                   type="button"
                   disabled={isApprovedOrArchived}
-                  onClick={() => {
-                    if (report.status === REPORT_STATUSES.READY_FOR_REVIEW) {
-                      onTriggerWorkflow('start_review');
-                    } else if (report.status === REPORT_STATUSES.UNDER_REVIEW) {
-                      onTriggerWorkflow('forward_approval');
-                    } else {
-                      onTriggerWorkflow('approve');
-                    }
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-[#04244B] hover:bg-[#069B74] text-white text-xs font-extrabold transition-colors disabled:opacity-50 cursor-pointer"
+                  onClick={() => onTriggerWorkflow('approve')}
+                  title={
+                    isApprovedOrArchived
+                      ? 'تم اعتماد التقرير رسمياً'
+                      : dualSigEval.hasBothSignatures
+                        ? 'اعتماد التقرير رسمياً'
+                        : 'يتطلب توقيع معد التقرير وتوقيع معتمد التقرير قبل الاعتماد'
+                  }
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-white text-xs font-extrabold transition-colors disabled:opacity-50 cursor-pointer ${
+                    isApprovedOrArchived
+                      ? 'bg-[#07976E]'
+                      : dualSigEval.hasBothSignatures
+                        ? 'bg-[#07976E] hover:bg-[#05805d]'
+                        : 'bg-[#04244B] hover:bg-[#10518C]'
+                  }`}
                 >
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#DFC076]" />
-                  <span>{isApprovedOrArchived ? 'تم اعتماد التقرير' : 'اعتماد التقرير'}</span>
+                  {isApprovedOrArchived || dualSigEval.hasBothSignatures ? (
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#DFC076]" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5 text-[#DFC076]" />
+                  )}
+                  <span>
+                    {isApprovedOrArchived
+                      ? 'تم اعتماد التقرير'
+                      : dualSigEval.hasBothSignatures
+                        ? 'اعتماد التقرير'
+                        : 'اعتماد التقرير (يتطلب التوقيعين)'}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -3628,6 +4110,69 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Dual-Signature Mandatory Verification Gate Indicator Bar */}
+        {!isApprovedOrArchived && (
+          <div
+            className={`rounded-xl border p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 text-xs ${
+              dualSigEval.hasBothSignatures
+                ? 'bg-emerald-50/75 border-[#07976E]/45 text-[#082D56]'
+                : 'bg-[#EFF6FC] border-[#A3C0DE] text-[#082D56]'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {dualSigEval.hasBothSignatures ? (
+                <ShieldCheck className="w-4 h-4 text-[#07976E] shrink-0 mt-0.5" />
+              ) : (
+                <ShieldAlert className="w-4 h-4 text-[#C94444] shrink-0 mt-0.5" />
+              )}
+              <div>
+                <span className="font-extrabold block">
+                  {dualSigEval.hasBothSignatures
+                    ? 'اكتمل التوقيع الإلكتروني للطرفين — التقرير مستوفي شرط الاعتماد المزدوج'
+                    : 'شرط الاعتماد الإلزامي بالتوقيع المزدوج للطرفين'}
+                </span>
+                <span className="text-[11px] text-slate-600">
+                  {dualSigEval.hasBothSignatures
+                    ? 'تم التحقق من وجود وصلاحية توقيع معد التقرير وتوقيع معتمد التقرير وحفظهما في النظام.'
+                    : 'يُمنع اعتماد التقرير نهائياً إلا بعد استكمال وحفظ توقيع معد التقرير وتوقيع معتمد التقرير معاً.'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                  dualSigEval.hasValidPreparerSignature
+                    ? 'bg-white border-emerald-200 text-[#07976E]'
+                    : 'bg-white border-[#C94444]/35 text-[#C94444]'
+                }`}
+              >
+                {dualSigEval.hasValidPreparerSignature ? (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5" />
+                )}
+                <span>توقيع معد التقرير: {dualSigEval.preparer.labelAr}</span>
+              </span>
+
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                  dualSigEval.hasValidApproverSignature
+                    ? 'bg-white border-emerald-200 text-[#07976E]'
+                    : 'bg-white border-[#C94444]/35 text-[#C94444]'
+                }`}
+              >
+                {dualSigEval.hasValidApproverSignature ? (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5" />
+                )}
+                <span>توقيع معتمد التقرير: {dualSigEval.approver.labelAr}</span>
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Official Attestation ONLY when Approved or Archived */}
         {isApprovedOrArchived ? (

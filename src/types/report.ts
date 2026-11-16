@@ -254,6 +254,10 @@ export interface MonthlyReportFull {
   preparedAt: string | null;
   preparerSignatureHash: string | null;
   preparerSignatureImage: string | null;
+  preparerSignedAt?: string | null;
+  preparerSignedById?: string | null;
+  preparerSignedByName?: string | null;
+  preparerSignatureStatus?: 'valid' | 'revoked' | 'invalid';
   reviewerId: string | null;
   reviewerName: string;
   reviewerTitle: string;
@@ -264,6 +268,10 @@ export interface MonthlyReportFull {
   approvedAt: string | null;
   approverSignatureHash: string | null;
   approverSignatureImage: string | null;
+  approverSignedAt?: string | null;
+  approverSignedById?: string | null;
+  approverSignedByName?: string | null;
+  approverSignatureStatus?: 'valid' | 'revoked' | 'invalid';
   createdAt: string;
   updatedAt: string;
 

@@ -153,6 +153,22 @@ export const api = {
       categories: MaintenanceCategory[];
       thresholds: PerformanceThresholds;
     }>('/api/analytics/all'),
+  exportAnalyticsExcel: async (filters: Record<string, string>) => {
+    const token = getStoredToken();
+    const res = await fetch('/api/analytics/export/excel', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ filters }),
+    });
+    if (!res.ok) {
+      throw new ApiError('تعذر إنشاء ملف Excel للتحليلات التنفيذية', res.status);
+    }
+    return res.blob();
+  },
 
   createReport: (payload: { year: number; month: number; department: string }) =>
     request<{ report: MonthlyReportFull }>('/api/reports', {
@@ -198,7 +214,9 @@ export const api = {
   workflowAction: (
     id: string,
     action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision',
-    comment = ''
+    comment = '',
+    approverName?: string,
+    approverTitle?: string
   ) =>
     request<{
       report: MonthlyReportFull;
@@ -209,7 +227,7 @@ export const api = {
       };
     }>(`/api/reports/${encodeURIComponent(id)}/workflow`, {
       method: 'POST',
-      body: JSON.stringify({ action, comment }),
+      body: JSON.stringify({ action, comment, approverName, approverTitle }),
     }),
 
   addSite: (nameAr: string, nameEn: string) =>

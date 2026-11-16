@@ -632,10 +632,10 @@
   }
 }
 
-/* Print Styles for Official Executive Report Preview */
+/* Print Styles for Official Executive Report Preview & Isolated A4 Printing */
 @media print {
   @page {
-    margin: 12mm 10mm 16mm 10mm;
+    margin: 10mm 8mm 12mm 8mm;
   }
 
   html,
@@ -645,6 +645,13 @@
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     font-size: 11px !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* When printing from ExecutivePreviewModal or AnalyticsPrintModal, hide the background shell completely */
+  body.saaed-printing-modal .saaed-app-shell {
+    display: none !important;
   }
 
   .no-print {
@@ -653,6 +660,59 @@
 
   .print-only {
     display: block !important;
+  }
+
+  /* Neutralize screen modal scroll/backdrop constraints during print */
+  .saaed-preview-scroll-host {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    background: #FFFFFF !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .saaed-preview-zoom-stage {
+    transform: none !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .saaed-preview-sheet {
+    box-shadow: none !important;
+    border: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+  }
+
+  .official-report-pages-container {
+    display: block !important;
+  }
+
+  .official-report-page {
+    break-after: page !important;
+    page-break-after: always !important;
+    break-inside: avoid-page !important;
+    page-break-inside: avoid !important;
+    margin-bottom: 0 !important;
+  }
+
+  .official-report-page:last-child {
+    break-after: auto !important;
+    page-break-after: auto !important;
+  }
+
+  .fm-scroll,
+  .maintenance-table-wrapper,
+  main {
+    overflow: visible !important;
+    max-height: none !important;
   }
 
   .saaed-executive-header {
@@ -667,20 +727,20 @@
     break-inside: avoid !important;
     page-break-inside: avoid !important;
     width: 100% !important;
-    min-height: 72px !important;
-    max-height: 84px !important;
+    min-height: 70px !important;
+    max-height: 82px !important;
     padding: 6px 16px 8px 0 !important;
   }
 
   .print-section {
     break-inside: avoid-page;
     page-break-inside: avoid;
-    margin-bottom: 14px !important;
+    margin-bottom: 12px !important;
   }
 
   .print-table-section {
     break-inside: auto;
-    margin-bottom: 16px !important;
+    margin-bottom: 14px !important;
   }
 
   table {
@@ -699,6 +759,12 @@
   tr {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
+  }
+
+  h2,
+  h3 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
   }
 
   .print-footer-fixed {
@@ -1220,4 +1286,120 @@
   height: 4px !important;
 }
 
+/* ========================================================================= */
+/* SAAED Enterprise Notification & Modal System — Motion & Accessibility     */
+/* ========================================================================= */
+
+@keyframes saaedToastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes saaedModalFadeScale {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.saaed-toast-enter {
+  animation: saaedToastSlideIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.saaed-modal-enter {
+  animation: saaedModalFadeScale 190ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes saaedFieldHighlightPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(217, 154, 34, 0.55), 0 0 16px rgba(201, 68, 68, 0.25);
+    border-color: #d99a22;
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(201, 68, 68, 0.45), 0 0 22px rgba(217, 154, 34, 0.35);
+    border-color: #c94444;
+  }
+}
+
+.saaed-field-highlight {
+  outline: 2px solid #d99a22 !important;
+  outline-offset: 2px !important;
+  border-color: #c94444 !important;
+  background-color: #fffbeb !important;
+  animation: saaedFieldHighlightPulse 900ms ease-in-out 3;
+  transition: box-shadow 200ms ease, border-color 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .saaed-toast-enter,
+  .saaed-modal-enter,
+  .saaed-field-highlight {
+    animation: none !important;
+  }
+}
+
+/* ========================================================================= */
+/* Tasks & Milestones Table — Auto Text Wrapping & Dynamic Row Height        */
+/* ========================================================================= */
+
+.subject-cell {
+  vertical-align: middle;
+  height: auto;
+}
+
+.subject-field {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  text-overflow: clip;
+  direction: rtl;
+  text-align: right;
+  line-height: 1.6;
+  height: auto;
+  min-height: 40px;
+  resize: none;
+  overflow: hidden;
+}
+
+.task-auto-wrap-grid {
+  display: grid;
+  width: 100%;
+  align-items: stretch;
+}
+
+.task-auto-wrap-grid > .task-auto-wrap-mirror,
+.task-auto-wrap-grid > textarea.subject-field {
+  grid-area: 1 / 1 / 2 / 2;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  padding: 0.4rem 0.625rem;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  text-overflow: clip;
+  direction: rtl;
+  text-align: right;
+  min-height: 40px;
+}
+
+.task-auto-wrap-grid > .task-auto-wrap-mirror {
+  visibility: hidden;
+  pointer-events: none;
+  border: 1px solid transparent;
+  height: auto;
+}
 

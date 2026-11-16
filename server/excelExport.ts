@@ -22,12 +22,28 @@ import {
   isLinkedReceptionActivity,
 } from '../src/utils/calculations.ts';
 
-function findHeroBannerPath(): string | null {
+function resolveBrandAsset(name: string): string | null {
   const dir = path.join(process.cwd(), 'src', 'assets', 'images');
+  const p = path.join(dir, name);
+  if (fs.existsSync(p)) return p;
   if (!fs.existsSync(dir)) return null;
   const files = fs.readdirSync(dir);
-  const hero = files.find((f) => f.startsWith('hero_facility_panorama') && (f.endsWith('.jpg') || f.endsWith('.png')));
-  return hero ? path.join(dir, hero) : null;
+  const found = files.find((f) => f.startsWith(name) && (f.endsWith('.jpg') || f.endsWith('.png')));
+  return found ? path.join(dir, found) : null;
+}
+
+function estimateRowHeight(texts: string[], approxCharsPerLine: number, minHeight = 22): number {
+  let maxLines = 1;
+  for (const t of texts) {
+    if (!t) continue;
+    const paras = String(t).split(/\r?\n/);
+    let lines = 0;
+    for (const p of paras) {
+      lines += Math.max(1, Math.ceil(p.length / approxCharsPerLine));
+    }
+    if (lines > maxLines) maxLines = lines;
+  }
+  return Math.max(minHeight, maxLines * 17 + 6);
 }
 
 export async function generateMonthlyReportExcel(params: {
@@ -40,6 +56,11 @@ export async function generateMonthlyReportExcel(params: {
   const metrics = computeReportMetrics(report, sites, categories, thresholds);
   const monthAr = getMonthNameAr(report.month);
   const monthEn = getMonthNameEn(report.month);
+  const isApprovedOrArchived = report.status === 'approved' || report.status === 'archived';
+
+  // Dynamic column span accommodating ALL categories without truncation
+  const activeCategories = categories;
+  const totalCols = Math.max(14, activeCategories.length + 2);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'SAAED Facilities Management Executive System';
@@ -47,32 +68,35 @@ export async function generateMonthlyReportExcel(params: {
   wb.modified = new Date();
 
   const ws = wb.addWorksheet('التقرير الشهري', {
-    views: [{ rightToLeft: true, showGridLines: true }],
+    views: [{ rightToLeft: true, showGridLines: false }],
     pageSetup: {
       paperSize: 9, // A4
       orientation: 'landscape',
       fitToPage: true,
       fitToWidth: 1,
       fitToHeight: 0,
+      showGridLines: false,
       margins: {
-        left: 0.35,
-        right: 0.35,
-        top: 0.45,
-        bottom: 0.55,
-        header: 0.25,
-        footer: 0.25,
+        left: 0.3,
+        right: 0.3,
+        top: 0.4,
+        bottom: 0.5,
+        header: 0.2,
+        footer: 0.22,
       },
     },
     headerFooter: {
-      oddFooter: `&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد للأنظمة المرورية&Cتصنيف: ${report.classification}&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`,
+      oddFooter: `&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد&Cتصنيف: ${report.classification}&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`,
     },
   });
 
-  // 14 Columns wide enough for the 12-category maintenance matrix + site name + total
-  const colWidths = [16, 28, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 16];
-  colWidths.forEach((w, idx) => {
-    ws.getColumn(idx + 1).width = w;
-  });
+  // Dynamic column widths: col 1 = #, col 2 = Site/Title, cols 3..totalCols-1 = matrix/data, totalCols = Total
+  for (let c = 1; c <= totalCols; c++) {
+    if (c === 1) ws.getColumn(c).width = 18;
+    else if (c === 2) ws.getColumn(c).width = 26;
+    else if (c === totalCols) ws.getColumn(c).width = 17;
+    else ws.getColumn(c).width = 14;
+  }
 
   const NAVY = 'FF0B2341';
   const BLUE = 'FF1769AA';
@@ -94,7 +118,7 @@ export async function generateMonthlyReportExcel(params: {
   // === CORPORATE HEADER BANNER (Rows 1-5) ===
   for (let r = 1; r <= 5; r++) {
     ws.getRow(r).height = r === 5 ? 6 : 24;
-    for (let c = 1; c <= 14; c++) {
+    for (let c = 1; c <= totalCols; c++) {
       const cell = ws.getCell(r, c);
       cell.fill = {
         type: 'pattern',
@@ -104,54 +128,74 @@ export async function generateMonthlyReportExcel(params: {
     }
   }
 
-  ws.mergeCells('C1:K2');
-  const titleCell = ws.getCell('C1');
+  // White right wing cells for official logo visibility
+  for (let r = 1; r <= 4; r++) {
+    for (let c = 1; c <= 2; c++) {
+      ws.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: WHITE } };
+    }
+  }
+
+  const titleEndCol = totalCols - 2;
+  ws.mergeCells(1, 3, 2, titleEndCol);
+  const titleCell = ws.getCell(1, 3);
   titleCell.value = 'التقرير الشهري لقسم إدارة المرافق';
   titleCell.font = { name: 'Cairo', size: 18, bold: true, color: { argb: WHITE } };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  ws.mergeCells('C3:K3');
-  const subCell = ws.getCell('C3');
+  ws.mergeCells(3, 3, 3, titleEndCol);
+  const subCell = ws.getCell(3, 3);
   subCell.value = `إدارة الخدمات العامة · شهر ${monthAr} ${report.year} · Facilities Management Monthly Report (${monthEn} ${report.year})`;
   subCell.font = { name: 'Cairo', size: 11, bold: true, color: { argb: GOLD } };
   subCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  ws.mergeCells('C4:K4');
-  const metaCell = ws.getCell('C4');
+  ws.mergeCells(4, 3, 4, titleEndCol);
+  const metaCell = ws.getCell(4, 3);
   metaCell.value = `رقم التقرير: ${report.reportNumber}  |  الحالة: ${STATUS_LABELS_AR[report.status]}  |  الإصدار: v${report.currentVersion}  |  الشركة: ${report.company}`;
   metaCell.font = { name: 'Cairo', size: 9.5, color: { argb: 'FFE2E8F0' } };
   metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  // Embed SAAED Logo in top-right (Cols 1-2 in RTL = right side)
-  const logoPath = path.join(process.cwd(), 'public', 'assets', 'aistudio', 'logo_1afd1154.png');
-  if (fs.existsSync(logoPath)) {
+  // Embed Official SAAED Logo Mark in White Wing (Cols 1-2 in RTL = right side)
+  const logoPath = resolveBrandAsset('saaed_logo_mark.png') || path.join(process.cwd(), 'public', 'assets', 'aistudio', 'logo_1afd1154.png');
+  if (logoPath && fs.existsSync(logoPath)) {
     const logoId = wb.addImage({
       buffer: fs.readFileSync(logoPath) as unknown as ExcelJS.Buffer,
       extension: 'png',
     });
     ws.addImage(logoId, {
-      tl: { col: 0.15, row: 0.25 },
-      ext: { width: 155, height: 68 },
+      tl: { col: 0.25, row: 0.35 },
+      ext: { width: 160, height: 64 },
     });
   }
 
-  // Embed Facility Panorama image on left side (Cols 12-14 in RTL = left side)
-  const heroPath = findHeroBannerPath();
+  // Embed Corporate Building Backdrop on left wing (Last 2 cols in RTL = left side)
+  const heroPath = resolveBrandAsset('saaed_header_visual_bg.png') || resolveBrandAsset('hero_facility_panorama');
   if (heroPath && fs.existsSync(heroPath)) {
     const heroId = wb.addImage({
       buffer: fs.readFileSync(heroPath) as unknown as ExcelJS.Buffer,
-      extension: 'jpeg',
+      extension: heroPath.endsWith('.png') ? 'png' : 'jpeg',
     });
     ws.addImage(heroId, {
-      tl: { col: 11.15, row: 0.18 },
-      ext: { width: 205, height: 80 },
+      tl: { col: totalCols - 2.0, row: 0.12 },
+      ext: { width: 195, height: 82 },
     });
   }
 
-  let rowIdx = 7;
+  let rowIdx = 6;
+  if (!isApprovedOrArchived) {
+    ws.mergeCells(rowIdx, 1, rowIdx, totalCols);
+    const draftBanner = ws.getCell(rowIdx, 1);
+    draftBanner.value = `تنبيه: نسخة مسودة / قيد المراجعة (${STATUS_LABELS_AR[report.status]}) — غير معتمدة نهائياً`;
+    draftBanner.font = { name: 'Cairo', size: 10, bold: true, color: { argb: 'FF92400E' } };
+    draftBanner.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+    draftBanner.alignment = { horizontal: 'center', vertical: 'middle' };
+    draftBanner.border = thinBorder;
+    ws.getRow(rowIdx).height = 20;
+    rowIdx++;
+  }
+  rowIdx++;
 
   const addSectionBanner = (arTitle: string, enTitle: string) => {
-    ws.mergeCells(rowIdx, 1, rowIdx, 14);
+    ws.mergeCells(rowIdx, 1, rowIdx, totalCols);
     const cell = ws.getCell(rowIdx, 1);
     cell.value = `${arTitle}  ·  ${enTitle}`;
     cell.font = { name: 'Cairo', size: 12, bold: true, color: { argb: WHITE } };
@@ -165,41 +209,254 @@ export async function generateMonthlyReportExcel(params: {
   // Let's reserve row numbers cleanly:
   // First write Section 1 Executive Summary at rows 8-10, and we'll wire its formulas directly to Section 3 Totals row!
   addSectionBanner('1. الملخص التنفيذي', 'Executive Summary');
-  const execHeaderRow = rowIdx;
+  const execImgRow = rowIdx;
   const execValRow = rowIdx + 1;
-  ws.getRow(execHeaderRow).height = 22;
+  const execHeaderRow = rowIdx + 2;
+  ws.getRow(execImgRow).height = 46;
   ws.getRow(execValRow).height = 28;
+  ws.getRow(execHeaderRow).height = 22;
 
-  // We know Section 3 (Services Summary) starts right below Section 2! Let's compute exact row indices:
-  // Section 1: header + 2 rows + 1 spacer = 4 rows (rows 7..10)
-  // Section 2 (Requests by Service): banner (12) + header (13) + 11 rows (14..24) + Total (25) + spacer (26)
-  // Section 3 (Services Summary): banner (27) + header (28) + 11 rows (29..39) + Total (40)!
-  const sec3FirstDataRow = rowIdx + 2 + 1 + 1 + 1 + 11 + 1 + 1 + 1 + 1; // let's verify dynamically after writing Section 3!
-  void sec3FirstDataRow;
+  const resolveExcelTopServicePhotoPrefix = (
+    topSvc?: { serviceId?: string; nameAr?: string; nameEn?: string } | null
+  ): string => {
+    if (!topSvc) return 'analytics_boardroom_strategy';
+    const byId: Record<string, string> = {
+      svc_reception: 'facility_reception_hall',
+      svc_hospitality: 'svc_top_hospitality_lounge',
+      svc_maintenance: 'analytics_maintenance_ops',
+      svc_logistics: 'facility_safety_logistics',
+      svc_cleaning: 'svc_top_cleaning_sanitation',
+      svc_waste: 'archive_card_digital',
+      svc_assets: 'analytics_services_hub',
+      svc_petty_cash: 'analytics_finance_desk',
+      svc_disbursement: 'analytics_finance_desk',
+      svc_government: 'svc_top_government_docs',
+      svc_access_permit: 'svc_top_security_surveillance',
+      svc_security: 'svc_top_security_surveillance',
+    };
+    const id = (topSvc.serviceId || '').trim();
+    if (id && byId[id]) return byId[id];
+    const text = `${topSvc.nameAr || ''} ${topSvc.nameEn || ''}`.toLowerCase();
+    if (text.includes('استقبال') || text.includes('reception')) return 'facility_reception_hall';
+    if (text.includes('ضياف') || text.includes('hospitality')) return 'svc_top_hospitality_lounge';
+    if (text.includes('صيان') || text.includes('maintenance')) return 'analytics_maintenance_ops';
+    if (text.includes('لوجست') || text.includes('logistics')) return 'facility_safety_logistics';
+    if (text.includes('نظاف') || text.includes('clean')) return 'svc_top_cleaning_sanitation';
+    if (text.includes('نفاي') || text.includes('waste')) return 'archive_card_digital';
+    if (text.includes('أمن') || text.includes('تصريح') || text.includes('security')) return 'svc_top_security_surveillance';
+    if (text.includes('حكوم') || text.includes('government')) return 'svc_top_government_docs';
+    if (text.includes('أصول') || text.includes('asset')) return 'analytics_services_hub';
+    if (text.includes('نثري') || text.includes('صرف') || text.includes('cash')) return 'analytics_finance_desk';
+    return 'analytics_boardroom_strategy';
+  };
 
   const execCards = [
-    { startCol: 1, endCol: 3, label: 'إجمالي الطلبات المستلمة | Total Requests', color: NAVY },
-    { startCol: 4, endCol: 6, label: 'الطلبات المنفذة | Executed Requests', color: BLUE },
-    { startCol: 7, endCol: 10, label: 'الخدمة الأعلى طلباً | Top Service Demand', color: GOLD },
-    { startCol: 11, endCol: 14, label: 'نسبة الإنجاز الكلية | Overall Completion', color: EMERALD },
+    {
+      startCol: 1,
+      endCol: 3,
+      label: 'إجمالي الطلبات | Total Requests',
+      headerBg: BLUE,
+      bodyBg: 'FFEBF2FC',
+      valColor: NAVY,
+      photoPrefix: 'kpi_total_requests_desk',
+    },
+    {
+      startCol: 4,
+      endCol: 6,
+      label: 'أعلى خدمة طلباً | Top Service',
+      headerBg: GOLD,
+      bodyBg: 'FFF9F0DA',
+      valColor: NAVY,
+      photoPrefix: resolveExcelTopServicePhotoPrefix(metrics.topService),
+    },
+    {
+      startCol: 7,
+      endCol: 9,
+      label: 'إجمالي الخدمات | Total Services',
+      headerBg: BLUE,
+      bodyBg: 'FFE4F0FC',
+      valColor: NAVY,
+      photoPrefix: 'kpi_total_services_systems',
+    },
+    {
+      startCol: 10,
+      endCol: 12,
+      label: 'نسبة الإنجاز الشهرية | Monthly Completion Rate',
+      headerBg: EMERALD,
+      bodyBg: 'FFE1F6ED',
+      valColor: EMERALD,
+      photoPrefix: 'kpi_completion_rate_check',
+    },
   ];
 
   execCards.forEach((card) => {
-    ws.mergeCells(execHeaderRow, card.startCol, execHeaderRow, card.endCol);
+    ws.mergeCells(execImgRow, card.startCol, execImgRow, card.endCol);
     ws.mergeCells(execValRow, card.startCol, execValRow, card.endCol);
-    const hCell = ws.getCell(execHeaderRow, card.startCol);
-    hCell.value = card.label;
-    hCell.font = { name: 'Cairo', size: 10, bold: true, color: { argb: WHITE } };
-    hCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.color } };
-    hCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.mergeCells(execHeaderRow, card.startCol, execHeaderRow, card.endCol);
+
+    const imgCell = ws.getCell(execImgRow, card.startCol);
+    imgCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bodyBg } };
 
     const vCell = ws.getCell(execValRow, card.startCol);
-    vCell.font = { name: 'Cairo', size: 14, bold: true, color: { argb: NAVY } };
-    vCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLATE_BG } };
+    vCell.font = { name: 'Cairo', size: 13, bold: true, color: { argb: card.valColor } };
+    vCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bodyBg } };
     vCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const hCell = ws.getCell(execHeaderRow, card.startCol);
+    hCell.value = card.label;
+    hCell.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: WHITE } };
+    hCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.headerBg } };
+    hCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
     for (let c = card.startCol; c <= card.endCol; c++) {
-      ws.getCell(execHeaderRow, c).border = thinBorder;
+      ws.getCell(execImgRow, c).border = thinBorder;
       ws.getCell(execValRow, c).border = thinBorder;
+      ws.getCell(execHeaderRow, c).border = thinBorder;
+    }
+
+    const cardPhotoPath = resolveBrandAsset(card.photoPrefix);
+    if (cardPhotoPath && fs.existsSync(cardPhotoPath)) {
+      const cardImgId = wb.addImage({
+        buffer: fs.readFileSync(cardPhotoPath) as unknown as ExcelJS.Buffer,
+        extension: 'jpeg',
+      });
+      ws.addImage(cardImgId, {
+        tl: { col: card.startCol - 0.88, row: execImgRow - 0.92 },
+        ext: { width: 175, height: 54 },
+      });
+    }
+  });
+
+  // Cols 13-14 in Section 1: Engineer Inspection Photo Card
+  ws.mergeCells(execImgRow, 13, execHeaderRow, 14);
+  const engCell = ws.getCell(execImgRow, 13);
+  engCell.value = 'متابعة هندسية ورقابة جودة';
+  engCell.font = { name: 'Cairo', size: 9, bold: true, color: { argb: GOLD } };
+  engCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  engCell.alignment = { horizontal: 'center', vertical: 'bottom' };
+  for (let r = execImgRow; r <= execHeaderRow; r++) {
+    for (let c = 13; c <= 14; c++) {
+      ws.getCell(r, c).border = thinBorder;
+    }
+  }
+  const engPhotoPath = resolveBrandAsset('engineer_tablet_inspector');
+  if (engPhotoPath && fs.existsSync(engPhotoPath)) {
+    const engImgId = wb.addImage({
+      buffer: fs.readFileSync(engPhotoPath) as unknown as ExcelJS.Buffer,
+      extension: 'jpeg',
+    });
+    ws.addImage(engImgId, {
+      tl: { col: 12.1, row: execImgRow - 0.9 },
+      ext: { width: 150, height: 84 },
+    });
+  }
+
+  rowIdx += 4;
+
+  // === OPERATIONS SUMMARY STRIP (ملخص العمليات والاعتماد — All 7 Cards) ===
+  addSectionBanner('ملخص العمليات والاعتماد (7 بطاقات تنفيذية)', 'Operations & Approval Summary Strip');
+  const opsHRow1 = rowIdx;
+  const opsVRow1 = rowIdx + 1;
+  ws.getRow(opsHRow1).height = 20;
+  ws.getRow(opsVRow1).height = 26;
+
+  const opsRow1Defs = [
+    {
+      startCol: 1,
+      endCol: 3,
+      title: 'تفاصيل الصيانة بالمقرات',
+      val: `${formatNumber(sites.length)} مقرات | ${formatNumber(metrics.maintenance.grandTotalFaults)} عطلاً`,
+      photoPrefix: 'facility_engineering_ops',
+    },
+    {
+      startCol: 4,
+      endCol: 7,
+      title: 'خدمات الصيانة (مصادر الطلبات)',
+      val: `المرافق: ${formatNumber(report.maintenanceServices.fromFacilitiesDept)} | إدارات أخرى: ${formatNumber(report.maintenanceServices.fromOtherDepts)}`,
+      photoPrefix: 'technician_electrical_panel',
+    },
+    {
+      startCol: 8,
+      endCol: 10,
+      title: 'الدعم اللوجستي',
+      val: `إجمالي الطلبات: ${formatNumber(metrics.logisticsTotal)} طلباً`,
+      photoPrefix: 'facility_safety_logistics',
+    },
+    {
+      startCol: 11,
+      endCol: 14,
+      title: 'خدمات الأمن والاستقبال',
+      val: `المستلمة: ${formatNumber(metrics.securityTotals.totalReceived)} | المنفذة: ${formatNumber(metrics.securityTotals.totalExecuted)}`,
+      photoPrefix: 'facility_reception_hall',
+    },
+  ];
+
+  opsRow1Defs.forEach((oc) => {
+    ws.mergeCells(opsHRow1, oc.startCol, opsHRow1, oc.endCol);
+    ws.mergeCells(opsVRow1, oc.startCol, opsVRow1, oc.endCol);
+    const hc = ws.getCell(opsHRow1, oc.startCol);
+    hc.value = oc.title;
+    hc.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: GOLD } };
+    hc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    hc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const vc = ws.getCell(opsVRow1, oc.startCol);
+    vc.value = oc.val;
+    vc.font = { name: 'Cairo', size: 10, bold: true, color: { argb: NAVY } };
+    vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_BLUE } };
+    vc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    for (let c = oc.startCol; c <= oc.endCol; c++) {
+      ws.getCell(opsHRow1, c).border = thinBorder;
+      ws.getCell(opsVRow1, c).border = thinBorder;
+    }
+  });
+  rowIdx += 2;
+
+  const opsHRow2 = rowIdx;
+  const opsVRow2 = rowIdx + 1;
+  ws.getRow(opsHRow2).height = 20;
+  ws.getRow(opsVRow2).height = 24;
+
+  const opsRow2Defs = [
+    {
+      startCol: 1,
+      endCol: 5,
+      title: 'المهام التشغيلية والمتابعة',
+      val: `الإجمالي: ${formatNumber(metrics.tasksSummary.totalMeaningful)} | المنجزة: ${formatNumber(metrics.tasksSummary.completed)} | قيد التنفيذ: ${formatNumber(metrics.tasksSummary.inProgress)} | المتأخرة: ${formatNumber(metrics.tasksSummary.delayed)}`,
+    },
+    {
+      startCol: 6,
+      endCol: 9,
+      title: 'التحديات والتوصيات',
+      val: `التحديات: ${formatNumber(report.challenges.filter((c) => c.challengeText.trim()).length)} | التوصيات: ${formatNumber(report.challenges.filter((c) => c.recommendationText.trim()).length)}`,
+    },
+    {
+      startCol: 10,
+      endCol: 14,
+      title: 'الإعداد والمراجعة والاعتماد',
+      val: `المعد: ${report.preparerName || '—'} | الحالة: ${STATUS_LABELS_AR[report.status]} | المعتمد: ${report.approverName || '—'}`,
+    },
+  ];
+
+  opsRow2Defs.forEach((oc) => {
+    ws.mergeCells(opsHRow2, oc.startCol, opsHRow2, oc.endCol);
+    ws.mergeCells(opsVRow2, oc.startCol, opsVRow2, oc.endCol);
+    const hc = ws.getCell(opsHRow2, oc.startCol);
+    hc.value = oc.title;
+    hc.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: WHITE } };
+    hc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE } };
+    hc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const vc = ws.getCell(opsVRow2, oc.startCol);
+    vc.value = oc.val;
+    vc.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: NAVY } };
+    vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLATE_BG } };
+    vc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    for (let c = oc.startCol; c <= oc.endCol; c++) {
+      ws.getCell(opsHRow2, c).border = thinBorder;
+      ws.getCell(opsVRow2, c).border = thinBorder;
     }
   });
 
@@ -384,15 +641,18 @@ export async function generateMonthlyReportExcel(params: {
   // Now wire Section 1 Executive Summary formulas to Section 3 Totals!
   ws.getCell(execValRow, 1).value = { formula: `F${sec3TotalRow}` };
   ws.getCell(execValRow, 1).numFmt = '#,##0';
-  ws.getCell(execValRow, 4).value = { formula: `H${sec3TotalRow}` };
-  ws.getCell(execValRow, 4).numFmt = '#,##0';
-  ws.getCell(execValRow, 7).value = metrics.topService
-    ? `${metrics.topService.nameAr} (${formatNumber(metrics.topService.receivedCount)})`
-    : 'لا تتوفر بيانات كافية';
-  ws.getCell(execValRow, 11).value = {
-    formula: `IF(F${sec3TotalRow}=0, "لا تتوفر بيانات كافية", H${sec3TotalRow}/F${sec3TotalRow})`,
+  ws.getCell(execValRow, 4).value = metrics.topService
+    ? `${metrics.topService.nameAr} (${formatNumber(metrics.topService.receivedCount)} طلب)`
+    : '0';
+  ws.getCell(execValRow, 7).value =
+    sortedSummary.length > 0
+      ? { formula: `COUNTIF(F${sec3Start}:F${sec3TotalRow - 1}, ">0")` }
+      : metrics.activeServicesCount;
+  ws.getCell(execValRow, 7).numFmt = '#,##0';
+  ws.getCell(execValRow, 10).value = {
+    formula: `IF(F${sec3TotalRow}=0, 0, H${sec3TotalRow}/F${sec3TotalRow})`,
   };
-  ws.getCell(execValRow, 11).numFmt = '0.0%';
+  ws.getCell(execValRow, 10).numFmt = '0.0%';
 
   rowIdx += 2;
 
@@ -422,7 +682,7 @@ export async function generateMonthlyReportExcel(params: {
 
   report.contracts.forEach((con, idx) => {
     const r = rowIdx;
-    ws.getRow(r).height = 22;
+    ws.getRow(r).height = estimateRowHeight([con.notes || ''], 42, 24);
     ws.mergeCells(r, 1, r, 3);
     ws.mergeCells(r, 4, r, 5);
     ws.mergeCells(r, 6, r, 7);
@@ -480,7 +740,7 @@ export async function generateMonthlyReportExcel(params: {
 
   report.safety.forEach((sf, idx) => {
     const r = rowIdx;
-    ws.getRow(r).height = 22;
+    ws.getRow(r).height = estimateRowHeight([sf.notes || ''], 42, 24);
     ws.mergeCells(r, 1, r, 3);
     ws.mergeCells(r, 4, r, 5);
     ws.mergeCells(r, 6, r, 7);
@@ -512,18 +772,85 @@ export async function generateMonthlyReportExcel(params: {
   });
   rowIdx++;
 
-  // === SECTION 6: تفاصيل الصيانة (المصفوفة والتكاليف) ===
+  // === SECTION 6: تفاصيل الصيانة (4 بطاقات إحصائية + المصفوفة والتكاليف + الرسم البياني) ===
   addSectionBanner('6. تفاصيل الصيانة حسب المقر والفئة والتكاليف (AED)', 'Maintenance Details Matrix & Financial Costs');
-  const activeCategories = categories.slice(0, 12);
-  // Note: if user added > 12 categories, adjust columns cleanly; base 12 fit nicely in cols 2..13 + total in col 14!
+
+  // 4 Maintenance KPI Cards at top of Section 6
+  const mKpiHRow = rowIdx;
+  const mKpiVRow = rowIdx + 1;
+  ws.getRow(mKpiHRow).height = 20;
+  ws.getRow(mKpiVRow).height = 24;
+  const sortedSitesForKpi = [...sites]
+    .map((s) => ({ nameAr: s.nameAr, faults: metrics.maintenance.siteTotals[s.id] ?? 0 }))
+    .sort((a, b) => b.faults - a.faults);
+  const topExcelSite =
+    sortedSitesForKpi.length > 0 && sortedSitesForKpi[0].faults > 0 ? sortedSitesForKpi[0] : null;
+
+  const maintKpiDefs = [
+    {
+      startCol: 1,
+      endCol: 3,
+      label: 'إجمالي الأعطال المسجلة',
+      val: `${formatNumber(metrics.maintenance.grandTotalFaults)} عطل`,
+      color: BLUE,
+    },
+    {
+      startCol: 4,
+      endCol: 7,
+      label: 'المقر الأعلى في الأعطال',
+      val: topExcelSite
+        ? `${topExcelSite.nameAr} (${formatNumber(topExcelSite.faults)} عطلاً)`
+        : 'لا توجد أعطال',
+      color: GOLD,
+    },
+    {
+      startCol: 8,
+      endCol: 11,
+      label: 'إجمالي التكلفة / النثرية (AED)',
+      val: `${metrics.maintenance.pettyCashTotalAed.toFixed(2)} AED`,
+      color: EMERALD,
+    },
+    {
+      startCol: 12,
+      endCol: 14,
+      label: 'إجمالي التكلفة / أمر شراء (AED)',
+      val: `${metrics.maintenance.purchaseOrderTotalAed.toFixed(2)} AED`,
+      color: NAVY,
+    },
+  ];
+  maintKpiDefs.forEach((mk) => {
+    ws.mergeCells(mKpiHRow, mk.startCol, mKpiHRow, mk.endCol);
+    ws.mergeCells(mKpiVRow, mk.startCol, mKpiVRow, mk.endCol);
+    const hc = ws.getCell(mKpiHRow, mk.startCol);
+    hc.value = mk.label;
+    hc.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: WHITE } };
+    hc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: mk.color } };
+    hc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const vc = ws.getCell(mKpiVRow, mk.startCol);
+    vc.value = mk.val;
+    vc.font = { name: 'Cairo', size: 11, bold: true, color: { argb: NAVY } };
+    vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLATE_BG } };
+    vc.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    for (let c = mk.startCol; c <= mk.endCol; c++) {
+      ws.getCell(mKpiHRow, c).border = thinBorder;
+      ws.getCell(mKpiVRow, c).border = thinBorder;
+    }
+  });
+  rowIdx += 2;
+
+  const maintTotalCol = Math.max(14, activeCategories.length + 2);
+  const lastCatColLetter = activeCategories.length > 0 ? ws.getColumn(activeCategories.length + 1).letter : 'B';
+  const maintTotalColLetter = ws.getColumn(maintTotalCol).letter;
   const maintHeaderRow = rowIdx;
-  ws.getRow(maintHeaderRow).height = 30;
+  ws.getRow(maintHeaderRow).height = 32;
   ws.getCell(maintHeaderRow, 1).value = 'المقر | Site';
   activeCategories.forEach((cat, idx) => {
     ws.getCell(maintHeaderRow, idx + 2).value = cat.nameAr;
   });
-  ws.getCell(maintHeaderRow, 14).value = 'إجمالي المقر';
-  for (let c = 1; c <= 14; c++) {
+  ws.getCell(maintHeaderRow, maintTotalCol).value = 'إجمالي المقر';
+  for (let c = 1; c <= maintTotalCol; c++) {
     const cell = ws.getCell(maintHeaderRow, c);
     cell.font = { name: 'Cairo', size: 9, bold: true, color: { argb: WHITE } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
@@ -542,11 +869,12 @@ export async function generateMonthlyReportExcel(params: {
       ws.getCell(r, cIdx + 2).value = val;
       ws.getCell(r, cIdx + 2).numFmt = '#,##0';
     });
-    ws.getCell(r, 14).value = { formula: `SUM(B${r}:M${r})` };
-    ws.getCell(r, 14).numFmt = '#,##0';
-    for (let c = 1; c <= 14; c++) {
+    ws.getCell(r, maintTotalCol).value =
+      activeCategories.length > 0 ? { formula: `SUM(B${r}:${lastCatColLetter}${r})` } : 0;
+    ws.getCell(r, maintTotalCol).numFmt = '#,##0';
+    for (let c = 1; c <= maintTotalCol; c++) {
       const cell = ws.getCell(r, c);
-      cell.font = { name: 'Cairo', size: 9.5, bold: c === 1 || c === 14, color: { argb: NAVY } };
+      cell.font = { name: 'Cairo', size: 9.5, bold: c === 1 || c === maintTotalCol, color: { argb: NAVY } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? WHITE : SLATE_BG } };
       cell.alignment = { horizontal: c === 1 ? 'right' : 'center', vertical: 'middle' };
       cell.border = thinBorder;
@@ -561,12 +889,14 @@ export async function generateMonthlyReportExcel(params: {
   ws.getCell(maintFaultTotalRow, 1).value = 'إجمالي الأعطال';
   activeCategories.forEach((_, cIdx) => {
     const colLetter = ws.getColumn(cIdx + 2).letter;
-    ws.getCell(maintFaultTotalRow, cIdx + 2).value = { formula: `SUM(${colLetter}${maintDataStart}:${colLetter}${maintDataEnd})` };
+    ws.getCell(maintFaultTotalRow, cIdx + 2).value =
+      sites.length > 0 ? { formula: `SUM(${colLetter}${maintDataStart}:${colLetter}${maintDataEnd})` } : 0;
     ws.getCell(maintFaultTotalRow, cIdx + 2).numFmt = '#,##0';
   });
-  ws.getCell(maintFaultTotalRow, 14).value = { formula: `SUM(N${maintDataStart}:N${maintDataEnd})` };
-  ws.getCell(maintFaultTotalRow, 14).numFmt = '#,##0';
-  for (let c = 1; c <= 14; c++) {
+  ws.getCell(maintFaultTotalRow, maintTotalCol).value =
+    sites.length > 0 ? { formula: `SUM(${maintTotalColLetter}${maintDataStart}:${maintTotalColLetter}${maintDataEnd})` } : 0;
+  ws.getCell(maintFaultTotalRow, maintTotalCol).numFmt = '#,##0';
+  for (let c = 1; c <= maintTotalCol; c++) {
     const cell = ws.getCell(maintFaultTotalRow, c);
     cell.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: WHITE } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE } };
@@ -584,11 +914,12 @@ export async function generateMonthlyReportExcel(params: {
     cell.value = report.maintenanceCosts[cat.id]?.pettyCashAed ?? 0;
     cell.numFmt = '#,##0.00';
   });
-  ws.getCell(pettyRow, 14).value = { formula: `SUM(B${pettyRow}:M${pettyRow})` };
-  ws.getCell(pettyRow, 14).numFmt = '#,##0.00 "AED"';
-  for (let c = 1; c <= 14; c++) {
+  ws.getCell(pettyRow, maintTotalCol).value =
+    activeCategories.length > 0 ? { formula: `SUM(B${pettyRow}:${lastCatColLetter}${pettyRow})` } : 0;
+  ws.getCell(pettyRow, maintTotalCol).numFmt = '#,##0.00 "AED"';
+  for (let c = 1; c <= maintTotalCol; c++) {
     const cell = ws.getCell(pettyRow, c);
-    cell.font = { name: 'Cairo', size: 9, bold: c === 1 || c === 14, color: { argb: NAVY } };
+    cell.font = { name: 'Cairo', size: 9, bold: c === 1 || c === maintTotalCol, color: { argb: NAVY } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_BLUE } };
     cell.alignment = { horizontal: c === 1 ? 'right' : 'center', vertical: 'middle' };
     cell.border = thinBorder;
@@ -604,16 +935,94 @@ export async function generateMonthlyReportExcel(params: {
     cell.value = report.maintenanceCosts[cat.id]?.purchaseOrderAed ?? 0;
     cell.numFmt = '#,##0.00';
   });
-  ws.getCell(poRow, 14).value = { formula: `SUM(B${poRow}:M${poRow})` };
-  ws.getCell(poRow, 14).numFmt = '#,##0.00 "AED"';
-  for (let c = 1; c <= 14; c++) {
+  ws.getCell(poRow, maintTotalCol).value =
+    activeCategories.length > 0 ? { formula: `SUM(B${poRow}:${lastCatColLetter}${poRow})` } : 0;
+  ws.getCell(poRow, maintTotalCol).numFmt = '#,##0.00 "AED"';
+  for (let c = 1; c <= maintTotalCol; c++) {
     const cell = ws.getCell(poRow, c);
-    cell.font = { name: 'Cairo', size: 9, bold: c === 1 || c === 14, color: { argb: NAVY } };
+    cell.font = { name: 'Cairo', size: 9, bold: c === 1 || c === maintTotalCol, color: { argb: NAVY } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_BLUE } };
     cell.alignment = { horizontal: c === 1 ? 'right' : 'center', vertical: 'middle' };
     cell.border = thinBorder;
   }
   rowIdx += 2;
+
+  // Executive Horizontal Facility Comparison Block (مقارنة الأعطال بين المقرات — مرتبة تنازلياً)
+  ws.getRow(rowIdx).height = 20;
+  ws.mergeCells(rowIdx, 1, rowIdx, 10);
+  ws.mergeCells(rowIdx, 11, rowIdx, 14);
+  ws.getCell(rowIdx, 1).value = 'مقارنة الأعطال بين المقرات — التوزيع التنازلي (Executive Horizontal Facility Comparison)';
+  ws.getCell(rowIdx, 11).value = `إجمالي الأعطال: ${metrics.maintenance.grandTotalFaults} عطلاً`;
+  for (let c = 1; c <= 14; c++) {
+    const cell = ws.getCell(rowIdx, c);
+    cell.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: c >= 11 ? GOLD : WHITE } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    cell.alignment = { horizontal: c >= 11 ? 'center' : 'right', vertical: 'middle' };
+    cell.border = thinBorder;
+  }
+  rowIdx++;
+
+  const sortedExcelSites = sites
+    .map((s, origIdx) => ({
+      id: s.id,
+      nameAr: s.nameAr,
+      faults: Math.max(0, Math.round(Number(metrics.maintenance.siteTotals[s.id]) || 0)),
+      sortOrder: typeof s.sortOrder === 'number' ? s.sortOrder : origIdx + 1,
+      origIdx,
+    }))
+    .sort((a, b) => {
+      if (b.faults !== a.faults) return b.faults - a.faults;
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return a.origIdx - b.origIdx;
+    });
+  const maxExcelSiteFaults = Math.max(...sortedExcelSites.map((s) => s.faults), 1);
+
+  sortedExcelSites.forEach((item, idx) => {
+    const r = ws.getRow(rowIdx);
+    r.height = 19;
+    const isTop = idx === 0 && item.faults > 0;
+    const barUnits = item.faults > 0 ? Math.max(1, Math.round((item.faults / maxExcelSiteFaults) * 18)) : 0;
+    const barVisual = barUnits > 0 ? '█'.repeat(barUnits) : '▏';
+    const shareRatio =
+      metrics.maintenance.grandTotalFaults > 0 ? item.faults / metrics.maintenance.grandTotalFaults : 0;
+
+    ws.mergeCells(rowIdx, 1, rowIdx, 3);
+    ws.mergeCells(rowIdx, 4, rowIdx, 10);
+    ws.mergeCells(rowIdx, 11, rowIdx, 12);
+    ws.mergeCells(rowIdx, 13, rowIdx, 14);
+
+    ws.getCell(rowIdx, 1).value = `${idx + 1}. ${item.nameAr}`;
+    ws.getCell(rowIdx, 4).value = barVisual;
+    ws.getCell(rowIdx, 11).value = item.faults;
+    ws.getCell(rowIdx, 11).numFmt = '#,##0 "عطلاً"';
+    ws.getCell(rowIdx, 13).value = shareRatio;
+    ws.getCell(rowIdx, 13).numFmt = '0.0%';
+
+    for (let c = 1; c <= 14; c++) {
+      const cell = ws.getCell(rowIdx, c);
+      const isBarCol = c >= 4 && c <= 10;
+      cell.font = {
+        name: 'Cairo',
+        size: 9.5,
+        bold: c <= 3 || c >= 11 || isTop,
+        color: {
+          argb: isBarCol ? (isTop ? GOLD : BLUE) : NAVY,
+        },
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: isTop ? 'FFEAF2FA' : idx % 2 === 0 ? WHITE : SLATE_BG },
+      };
+      cell.alignment = {
+        horizontal: c <= 3 || isBarCol ? 'right' : 'center',
+        vertical: 'middle',
+      };
+      cell.border = thinBorder;
+    }
+    rowIdx++;
+  });
+  rowIdx += 1;
 
   // === SECTION 7: خدمات الصيانة ===
   addSectionBanner('7. خدمات الصيانة (مصادر الطلبات)', 'Maintenance Services Sources');
@@ -719,7 +1128,75 @@ export async function generateMonthlyReportExcel(params: {
       cell.border = thinBorder;
     }
   }
-  rowIdx += 3;
+  rowIdx += 2;
+
+  // Executive Horizontal Bar Chart Block (Sorted Descending by Request Volume)
+  ws.getRow(rowIdx).height = 20;
+  ws.mergeCells(rowIdx, 1, rowIdx, 10);
+  ws.mergeCells(rowIdx, 11, rowIdx, 14);
+  ws.getCell(rowIdx, 1).value = 'التوزيع التنازلي لقنوات الدعم اللوجستي (Executive Horizontal Bar Chart)';
+  ws.getCell(rowIdx, 11).value = { formula: `"إجمالي الطلبات: " & TEXT(M${logReqRow},"#,##0") & " طلباً"` };
+  for (let c = 1; c <= 14; c++) {
+    const cell = ws.getCell(rowIdx, c);
+    cell.font = { name: 'Cairo', size: 9.5, bold: true, color: { argb: c >= 11 ? GOLD : WHITE } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    cell.alignment = { horizontal: c >= 11 ? 'center' : 'right', vertical: 'middle' };
+    cell.border = thinBorder;
+  }
+  rowIdx++;
+
+  const sortedExcelLogistics = metrics.logisticsWithPct
+    .map((item, origIdx) => ({ ...item, origIdx }))
+    .sort((a, b) => {
+      if (b.requestCount !== a.requestCount) return b.requestCount - a.requestCount;
+      return a.origIdx - b.origIdx;
+    });
+  const maxExcelLogReq = Math.max(...sortedExcelLogistics.map((l) => l.requestCount), 1);
+
+  sortedExcelLogistics.forEach((item, idx) => {
+    const r = ws.getRow(rowIdx);
+    r.height = 19;
+    const isTop = idx === 0 && item.requestCount > 0;
+    const barUnits = item.requestCount > 0 ? Math.max(1, Math.round((item.requestCount / maxExcelLogReq) * 18)) : 0;
+    const barVisual = barUnits > 0 ? '█'.repeat(barUnits) : '▏';
+
+    ws.mergeCells(rowIdx, 1, rowIdx, 3);
+    ws.mergeCells(rowIdx, 4, rowIdx, 10);
+    ws.mergeCells(rowIdx, 11, rowIdx, 12);
+    ws.mergeCells(rowIdx, 13, rowIdx, 14);
+
+    ws.getCell(rowIdx, 1).value = `${idx + 1}. ${item.nameAr}`;
+    ws.getCell(rowIdx, 4).value = barVisual;
+    ws.getCell(rowIdx, 11).value = item.requestCount;
+    ws.getCell(rowIdx, 11).numFmt = '#,##0 "طلباً"';
+    ws.getCell(rowIdx, 13).value = (item.sharePct ?? 0) / 100;
+    ws.getCell(rowIdx, 13).numFmt = '0.0%';
+
+    for (let c = 1; c <= 14; c++) {
+      const cell = ws.getCell(rowIdx, c);
+      const isBarCol = c >= 4 && c <= 10;
+      cell.font = {
+        name: 'Cairo',
+        size: 9.5,
+        bold: c <= 3 || c >= 11 || isTop,
+        color: {
+          argb: isBarCol ? (isTop ? GOLD : BLUE) : NAVY,
+        },
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: isTop ? 'FFEAF2FA' : idx % 2 === 0 ? WHITE : SLATE_BG },
+      };
+      cell.alignment = {
+        horizontal: c <= 3 || isBarCol ? 'right' : 'center',
+        vertical: 'middle',
+      };
+      cell.border = thinBorder;
+    }
+    rowIdx++;
+  });
+  rowIdx += 1;
 
   // === SECTION 9: خدمات الأمن والاستقبال ===
   addSectionBanner('9. خدمات الأمن والاستقبال', 'Security & Reception Services');
@@ -850,8 +1327,10 @@ export async function generateMonthlyReportExcel(params: {
 
   report.tasks.forEach((t, idx) => {
     const r = rowIdx;
-    const lineEst = Math.max(1, Math.ceil((t.taskName.length || 1) / 45));
-    ws.getRow(r).height = Math.max(22, lineEst * 18);
+    ws.getRow(r).height = Math.max(
+      estimateRowHeight([t.topic || ''], 22, 22),
+      estimateRowHeight([t.taskName || ''], 38, 22)
+    );
     ws.mergeCells(r, 2, r, 4);
     ws.mergeCells(r, 5, r, 9);
     ws.mergeCells(r, 10, r, 11);
@@ -899,9 +1378,11 @@ export async function generateMonthlyReportExcel(params: {
 
   report.challenges.forEach((ch, idx) => {
     const r = rowIdx;
-    const maxLen = Math.max(ch.challengeText.length, ch.updateText.length, ch.recommendationText.length, 30);
-    const lines = Math.max(2, Math.ceil(maxLen / 42));
-    ws.getRow(r).height = Math.max(28, lines * 18);
+    ws.getRow(r).height = estimateRowHeight(
+      [ch.challengeText || '', ch.updateText || '', ch.recommendationText || ''],
+      36,
+      28
+    );
 
     ws.mergeCells(r, 2, r, 5);
     ws.mergeCells(r, 6, r, 10);
@@ -1016,15 +1497,86 @@ export async function generateMonthlyReportExcel(params: {
 
   // Corporate Footer Row
   rowIdx++;
-  ws.mergeCells(rowIdx, 1, rowIdx, 14);
+  ws.mergeCells(rowIdx, 1, rowIdx, totalCols);
   const foot = ws.getCell(rowIdx, 1);
   foot.value = 'قسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد للأنظمة المرورية   ·   إعداد وتصميم: خالد الهاشمي | Prepared & Designed by Khaled Al Hashemi';
   foot.font = { name: 'Cairo', size: 9, bold: true, color: { argb: GOLD } };
   foot.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   foot.alignment = { horizontal: 'center', vertical: 'middle' };
-  ws.getRow(rowIdx).height = 22;
+  ws.getRow(rowIdx).height = 24;
 
-  ws.pageSetup.printArea = `A1:N${rowIdx}`;
+  const footerImgPath = resolveBrandAsset('saaed_footer_visual_bg.png');
+  if (footerImgPath && fs.existsSync(footerImgPath)) {
+    const footImgId = wb.addImage({
+      buffer: fs.readFileSync(footerImgPath) as unknown as ExcelJS.Buffer,
+      extension: 'png',
+    });
+    ws.addImage(footImgId, {
+      tl: { col: totalCols - 2.0, row: rowIdx - 0.92 },
+      ext: { width: 140, height: 22 },
+    });
+  }
+
+  const lastColLetter = ws.getColumn(totalCols).letter;
+  ws.pageSetup.printArea = `A1:${lastColLetter}${rowIdx}`;
+
+  // === SHEET 2: بيانات تفصيلية (Clean Flat Analytical Sheet without Merged Cells) ===
+  const wsData = wb.addWorksheet('بيانات تفصيلية', {
+    views: [{ rightToLeft: true, showGridLines: false }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, showGridLines: false },
+  });
+  [24, 34, 18, 18, 18, 22].forEach((w, i) => {
+    wsData.getColumn(i + 1).width = w;
+  });
+
+  const dataHeaderRow = wsData.addRow(['القسم', 'البند / البيان', 'القيمة الأولى', 'القيمة الثانية', 'الإجمالي / النسبة', 'ملاحظات']);
+  dataHeaderRow.height = 24;
+  dataHeaderRow.eachCell((cell) => {
+    cell.font = { name: 'Cairo', size: 10, bold: true, color: { argb: WHITE } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = thinBorder;
+  });
+
+  const flatRows: Array<[string, string, number | string, number | string, number | string, string]> = [
+    ['الملخص التنفيذي', 'إجمالي الطلبات المستلمة', metrics.totalReceived, metrics.totalExecuted, metrics.overallCompletionPct !== null ? `${metrics.overallCompletionPct.toFixed(1)}%` : '—', report.reportNumber],
+    ['الملخص التنفيذي', 'أعطال الصيانة والتكاليف (AED)', metrics.maintenance.grandTotalFaults, metrics.maintenance.pettyCashTotalAed, metrics.maintenance.grandTotalCostAed, `أمر الشراء: ${formatNumber(metrics.maintenance.purchaseOrderTotalAed)} AED`],
+    ...report.services.map((s): [string, string, number, number, string, string] => [
+      'الخدمات',
+      `${s.nameAr} (${s.nameEn})`,
+      s.receivedCount,
+      s.executedCount,
+      s.receivedCount > 0 ? `${((s.executedCount / s.receivedCount) * 100).toFixed(1)}%` : '—',
+      '',
+    ]),
+    ...activeCategories.map((cat): [string, string, number, number, number, string] => [
+      'فئات الصيانة',
+      cat.nameAr,
+      metrics.maintenance.categoryTotals[cat.id] ?? 0,
+      report.maintenanceCosts[cat.id]?.pettyCashAed ?? 0,
+      report.maintenanceCosts[cat.id]?.purchaseOrderAed ?? 0,
+      'الأعطال | النثرية AED | أمر الشراء AED',
+    ]),
+    ...sites.map((site): [string, string, number, string, string, string] => [
+      'المقرات',
+      site.nameAr,
+      metrics.maintenance.siteTotals[site.id] ?? 0,
+      '',
+      '',
+      'إجمالي الأعطال في المقر',
+    ]),
+  ];
+
+  flatRows.forEach((fr, idx) => {
+    const dr = wsData.addRow(fr);
+    dr.height = 20;
+    dr.eachCell((cell, colNum) => {
+      cell.font = { name: 'Cairo', size: 9.5, color: { argb: NAVY }, bold: colNum <= 2 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? WHITE : SLATE_BG } };
+      cell.alignment = { horizontal: colNum <= 2 || colNum === 6 ? 'right' : 'center', vertical: 'middle' };
+      cell.border = thinBorder;
+    });
+  });
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);

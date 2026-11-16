@@ -29,6 +29,25 @@ import {
   parseDisplayDateDDMMYYYY,
   syncReceptionServiceWithSecurity,
 } from '../src/utils/calculations.ts';
+import {
+  evaluateDualSignatureApproval,
+  isValidSignatureDataUrl,
+} from '../src/utils/signatureValidation.ts';
+import {
+  validateReportCompleteness,
+  type ReportValidationResult,
+} from '../src/services/ReportValidationService.ts';
+import { populateReportWithSampleData } from '../src/utils/sampleReportData.ts';
+
+export class DomainError extends Error {
+  statusCode: number;
+  validation?: ReportValidationResult;
+  constructor(message: string, statusCode = 400, validation?: ReportValidationResult) {
+    super(message);
+    this.statusCode = statusCode;
+    this.validation = validation;
+  }
+}
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
@@ -373,14 +392,25 @@ export function initSchemaAndSeed(): void {
     );
   `);
 
-  // Ensure new signature image columns exist on already-initialized databases
+  // Ensure new signature image & audit metadata columns exist on already-initialized databases
   const reportCols = db.prepare('PRAGMA table_info(monthly_reports)').all() as Array<{ name: string }>;
   const colNames = new Set(reportCols.map((c) => c.name));
-  if (!colNames.has('preparer_signature_image')) {
-    db.exec('ALTER TABLE monthly_reports ADD COLUMN preparer_signature_image TEXT;');
-  }
-  if (!colNames.has('approver_signature_image')) {
-    db.exec('ALTER TABLE monthly_reports ADD COLUMN approver_signature_image TEXT;');
+  const missingColumns: Array<[string, string]> = [
+    ['preparer_signature_image', 'TEXT'],
+    ['approver_signature_image', 'TEXT'],
+    ['preparer_signed_at', 'TEXT'],
+    ['preparer_signed_by_id', 'TEXT'],
+    ['preparer_signed_by_name', 'TEXT'],
+    ['preparer_signature_status', "TEXT NOT NULL DEFAULT 'valid'"],
+    ['approver_signed_at', 'TEXT'],
+    ['approver_signed_by_id', 'TEXT'],
+    ['approver_signed_by_name', 'TEXT'],
+    ['approver_signature_status', "TEXT NOT NULL DEFAULT 'valid'"],
+  ];
+  for (const [colName, colDef] of missingColumns) {
+    if (!colNames.has(colName)) {
+      db.exec(`ALTER TABLE monthly_reports ADD COLUMN ${colName} ${colDef};`);
+    }
   }
 
   const now = new Date().toISOString();
@@ -460,6 +490,44 @@ export function initSchemaAndSeed(): void {
   const reportsCount = db.prepare('SELECT COUNT(*) as cnt FROM monthly_reports').get() as { cnt: number };
   if (reportsCount.cnt === 0) {
     seedReferenceJan2027Report();
+  }
+
+  // Ensure any unfilled draft report has realistic sample template data pre-populated
+  populateUnfilledDraftReportsWithSampleData();
+}
+
+function populateUnfilledDraftReportsWithSampleData(): void {
+  const draftRows = db
+    .prepare(
+      `SELECT r.id,
+        COALESCE((SELECT SUM(received_count) FROM service_metrics WHERE report_id = r.id), 0) AS total_received,
+        COALESCE((SELECT COUNT(*) FROM tasks WHERE report_id = r.id AND TRIM(topic) != '' AND TRIM(task_name) != ''), 0) AS filled_tasks
+       FROM monthly_reports r
+       WHERE r.status = 'draft'`
+    )
+    .all() as Array<{ id: string; total_received: number; filled_tasks: number }>;
+
+  if (draftRows.length === 0) return;
+
+  const sites = getAllSites();
+  const categories = getAllCategories();
+  const systemAdmin: AuthUser = {
+    id: 'usr_admin',
+    email: 'mr.aljefre@gmail.com',
+    fullName: 'خالد الهاشمي',
+    jobTitle: 'مدير النظام التنفيذي',
+    role: USER_ROLES.ADMIN,
+    isActive: true,
+  };
+
+  for (const row of draftRows) {
+    if (Number(row.total_received) <= 5 || Number(row.filled_tasks) === 0) {
+      const report = getReportById(row.id);
+      if (report) {
+        const populated = populateReportWithSampleData(report, sites, categories);
+        saveReportData(row.id, populated, systemAdmin);
+      }
+    }
   }
 }
 
@@ -832,6 +900,14 @@ export function getReportById(reportId: string): MonthlyReportFull | null {
     preparedAt: r.prepared_at ? String(r.prepared_at) : null,
     preparerSignatureHash: r.preparer_signature_hash ? String(r.preparer_signature_hash) : null,
     preparerSignatureImage: r.preparer_signature_image ? String(r.preparer_signature_image) : null,
+    preparerSignedAt: r.preparer_signed_at ? String(r.preparer_signed_at) : null,
+    preparerSignedById: r.preparer_signed_by_id ? String(r.preparer_signed_by_id) : null,
+    preparerSignedByName: r.preparer_signed_by_name ? String(r.preparer_signed_by_name) : null,
+    preparerSignatureStatus: (
+      r.preparer_signature_status === 'revoked' || r.preparer_signature_status === 'invalid'
+        ? r.preparer_signature_status
+        : 'valid'
+    ) as 'valid' | 'revoked' | 'invalid',
     reviewerId: r.reviewer_id ? String(r.reviewer_id) : null,
     reviewerName: String(r.reviewer_name || ''),
     reviewerTitle: String(r.reviewer_title || ''),
@@ -842,6 +918,14 @@ export function getReportById(reportId: string): MonthlyReportFull | null {
     approvedAt: r.approved_at ? String(r.approved_at) : null,
     approverSignatureHash: r.approver_signature_hash ? String(r.approver_signature_hash) : null,
     approverSignatureImage: r.approver_signature_image ? String(r.approver_signature_image) : null,
+    approverSignedAt: r.approver_signed_at ? String(r.approver_signed_at) : null,
+    approverSignedById: r.approver_signed_by_id ? String(r.approver_signed_by_id) : null,
+    approverSignedByName: r.approver_signed_by_name ? String(r.approver_signed_by_name) : null,
+    approverSignatureStatus: (
+      r.approver_signature_status === 'revoked' || r.approver_signature_status === 'invalid'
+        ? r.approver_signature_status
+        : 'valid'
+    ) as 'valid' | 'revoked' | 'invalid',
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
     services,
@@ -918,6 +1002,44 @@ export function createBlankMonthlyReport(params: {
     throw new Error('يوجد تقرير مسجل مسبقاً لنفس الشهر والسنة والنطاق الإداري');
   }
 
+  const prevReport =
+    (db
+      .prepare(
+        `SELECT preparer_name, preparer_title, approver_name, approver_title
+         FROM monthly_reports
+         WHERE (year < ? OR (year = ? AND month < ?))
+         ORDER BY year DESC, month DESC, updated_at DESC
+         LIMIT 1`
+      )
+      .get(params.year, params.year, params.month) as
+      | {
+          preparer_name: string;
+          preparer_title: string;
+          approver_name: string;
+          approver_title: string;
+        }
+      | undefined) ??
+    (db
+      .prepare(
+        `SELECT preparer_name, preparer_title, approver_name, approver_title
+         FROM monthly_reports
+         ORDER BY year DESC, month DESC, updated_at DESC
+         LIMIT 1`
+      )
+      .get() as
+      | {
+          preparer_name: string;
+          preparer_title: string;
+          approver_name: string;
+          approver_title: string;
+        }
+      | undefined);
+
+  const initialPreparerName = (prevReport?.preparer_name || '').trim() || params.user.fullName;
+  const initialPreparerTitle = (prevReport?.preparer_title || '').trim() || params.user.jobTitle;
+  const initialApproverName = (prevReport?.approver_name || '').trim();
+  const initialApproverTitle = (prevReport?.approver_title || '').trim();
+
   const now = new Date().toISOString();
   const periodId = `period_${params.year}_${String(params.month).padStart(2, '0')}_${crypto.randomUUID().slice(0, 6)}`;
   const reportId = `rep_${params.year}_${String(params.month).padStart(2, '0')}_${crypto.randomUUID().slice(0, 8)}`;
@@ -946,7 +1068,7 @@ export function createBlankMonthlyReport(params: {
         preparer_id, preparer_name, preparer_title,
         approver_name, approver_title,
         maint_from_facilities, maint_from_other, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Public', 'draft', 1, ?, ?, ?, '', '', 0, 0, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Public', 'draft', 1, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
     ).run(
       reportId,
       periodId,
@@ -956,8 +1078,10 @@ export function createBlankMonthlyReport(params: {
       params.department,
       'ساعد للأنظمة المرورية — SAAED',
       params.user.id,
-      params.user.fullName,
-      params.user.jobTitle,
+      initialPreparerName,
+      initialPreparerTitle,
+      initialApproverName,
+      initialApproverTitle,
       now,
       now
     );
@@ -1047,7 +1171,8 @@ export function createBlankMonthlyReport(params: {
 
   const created = getReportById(reportId);
   if (!created) throw new Error('تعذر تحميل التقرير بعد إنشائه');
-  return created;
+  const populated = populateReportWithSampleData(created, getAllSites(), getAllCategories());
+  return saveReportData(reportId, populated, params.user);
 }
 
 export function saveReportData(reportId: string, payload: MonthlyReportFull, user: AuthUser): MonthlyReportFull {
@@ -1099,8 +1224,8 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
     if (key) seenSecurityKeys.add(key);
   }
 
-  const sanitizedPreparerSig = sanitizeSignatureDataUrl(payload.preparerSignatureImage);
-  const sanitizedApproverSig = sanitizeSignatureDataUrl(payload.approverSignatureImage);
+  // Note: electronic signature images & statuses are ONLY written via dedicated saveReportSignature()
+  // so draft/payload edits can never spoof or alter persisted electronic signatures.
   const sanitizedPreparedAt = sanitizeReportDate(payload.preparedAt);
   const sanitizedApprovedAt = sanitizeReportDate(payload.approvedAt);
 
@@ -1113,11 +1238,9 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
         preparer_name = ?,
         preparer_title = ?,
         prepared_at = ?,
-        preparer_signature_image = ?,
         approver_name = ?,
         approver_title = ?,
         approved_at = ?,
-        approver_signature_image = ?,
         maint_from_facilities = ?,
         maint_from_other = ?,
         updated_at = ?
@@ -1127,11 +1250,9 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
       payload.preparerName || '',
       payload.preparerTitle || '',
       sanitizedPreparedAt,
-      sanitizedPreparerSig,
       payload.approverName || '',
       payload.approverTitle || '',
       sanitizedApprovedAt,
-      sanitizedApproverSig,
       Math.max(0, Math.round(Number(payload.maintenanceServices.fromFacilitiesDept) || 0)),
       Math.max(0, Math.round(Number(payload.maintenanceServices.fromOtherDepts) || 0)),
       now,
@@ -1312,15 +1433,18 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
 export function sanitizeSignatureDataUrl(val: unknown): string | null {
   if (val === null || val === undefined || val === '') return null;
   if (typeof val !== 'string') {
-    throw new Error('صيغة صورة التوقيع غير صالحة');
+    throw new DomainError('صيغة صورة التوقيع غير صالحة', 400);
   }
   const trimmed = val.trim();
   if (!trimmed) return null;
   if (trimmed.length > 750_000) {
-    throw new Error('حجم صورة التوقيع يتجاوز الحد المسموح (الحد الأقصى ~500 كيلوبايت)');
+    throw new DomainError('حجم صورة التوقيع يتجاوز الحد المسموح (الحد الأقصى ~500 كيلوبايت)', 400);
   }
   if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed)) {
-    throw new Error('يجب أن تكون صورة التوقيع بصيغة PNG أو JPG أو WEBP صالحة');
+    throw new DomainError('يجب أن تكون صورة التوقيع بصيغة PNG أو JPG أو WEBP صالحة', 400);
+  }
+  if (!isValidSignatureDataUrl(trimmed)) {
+    throw new DomainError('صورة التوقيع فارغة أو غير صالحة للاستخدام الرسمي', 400);
   }
   return trimmed;
 }
@@ -1433,10 +1557,10 @@ export function saveReportSignature(params: {
   user: AuthUser;
 }): MonthlyReportFull {
   const existing = getReportById(params.reportId);
-  if (!existing) throw new Error('التقرير غير موجود');
+  if (!existing) throw new DomainError('التقرير غير موجود', 404);
 
   if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
-    throw new Error('يُمنع تعديل توقيعات النسخة المعتمدة أو المؤرشفة مباشرة');
+    throw new DomainError('يُمنع تعديل توقيعات النسخة المعتمدة أو المؤرشفة مباشرة', 403);
   }
 
   const { user, target } = params;
@@ -1445,33 +1569,92 @@ export function saveReportSignature(params: {
   if (target === 'preparer') {
     const allowed = user.role === USER_ROLES.ADMIN || (user.role === USER_ROLES.PREPARER && isDraft);
     if (!allowed) {
-      throw new Error('لا تملك صلاحية تعديل توقيع معد التقرير في هذه المرحلة');
+      throw new DomainError('لا تملك صلاحية تعديل توقيع معد التقرير في هذه المرحلة', 403);
     }
   } else if (target === 'approver') {
-    const allowed =
-      user.role === USER_ROLES.ADMIN ||
-      user.role === USER_ROLES.APPROVER ||
-      (user.role === USER_ROLES.PREPARER && isDraft);
+    // STRICT RBAC: Only ADMIN or APPROVER may add/update/remove the Approver signature.
+    // Preparer/Reviewer/Viewer are strictly prohibited from signing on behalf of the Approver.
+    const allowed = user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.APPROVER;
     if (!allowed) {
-      throw new Error('لا تملك صلاحية تعديل توقيع الاعتماد في هذه المرحلة');
+      throw new DomainError(
+        'صلاحية توقيع المعتمد مخصصة لصاحب صلاحية الاعتماد أو مدير النظام فقط — لا يُسمح بتوقيع المعتمد من قبل مستخدم غير مخوّل',
+        403
+      );
     }
   } else {
-    throw new Error('نوع التوقيع المطلوب غير صحيح');
+    throw new DomainError('نوع التوقيع المطلوب غير صحيح', 400);
   }
 
   const sanitized = sanitizeSignatureDataUrl(params.signatureImage);
+
+  // Enforce Smart Report Completeness Validation before adding/updating a signature
+  // (Removing a signature via null is always permitted)
+  if (sanitized !== null) {
+    const validation = validateReportCompleteness(existing, {
+      stage: target === 'preparer' ? 'sign_preparer' : 'sign_approver',
+      sites: getAllSites(),
+      categories: getAllCategories(),
+      user,
+    });
+    if (!validation.isComplete) {
+      const firstMsg = validation.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة';
+      throw new DomainError(
+        `تعذر استكمال التوقيع لوجود بيانات غير مكتملة (${validation.missingRequiredFields} حقول ناقصة): ${firstMsg}`,
+        400,
+        validation
+      );
+    }
+  }
+
   const now = new Date().toISOString();
-  const column = target === 'preparer' ? 'preparer_signature_image' : 'approver_signature_image';
-  const fieldPath = target === 'preparer' ? 'preparerSignatureImage' : 'approverSignatureImage';
   const roleLabel = target === 'preparer' ? 'معد التقرير' : 'المعتمد';
+  const fieldPath = target === 'preparer' ? 'preparerSignatureImage' : 'approverSignatureImage';
 
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(`UPDATE monthly_reports SET ${column} = ?, updated_at = ? WHERE id = ?`).run(
-      sanitized,
-      now,
-      params.reportId
-    );
+    if (target === 'preparer') {
+      db.prepare(
+        `UPDATE monthly_reports SET
+          preparer_signature_image = ?,
+          preparer_signed_at = ?,
+          preparer_signed_by_id = ?,
+          preparer_signed_by_name = ?,
+          preparer_signature_status = 'valid',
+          updated_at = ?
+        WHERE id = ?`
+      ).run(
+        sanitized,
+        sanitized ? now : null,
+        sanitized ? user.id : null,
+        sanitized ? user.fullName : null,
+        now,
+        params.reportId
+      );
+    } else {
+      const effectiveApproverName = existing.approverName.trim() || user.fullName;
+      const effectiveApproverTitle = existing.approverTitle.trim() || user.jobTitle;
+      db.prepare(
+        `UPDATE monthly_reports SET
+          approver_signature_image = ?,
+          approver_signed_at = ?,
+          approver_signed_by_id = ?,
+          approver_signed_by_name = ?,
+          approver_signature_status = 'valid',
+          approver_name = CASE WHEN TRIM(approver_name) = '' THEN ? ELSE approver_name END,
+          approver_title = CASE WHEN TRIM(approver_title) = '' THEN ? ELSE approver_title END,
+          updated_at = ?
+        WHERE id = ?`
+      ).run(
+        sanitized,
+        sanitized ? now : null,
+        sanitized ? user.id : null,
+        sanitized ? user.fullName : null,
+        effectiveApproverName,
+        effectiveApproverTitle,
+        now,
+        params.reportId
+      );
+    }
 
     db.prepare(
       'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -1505,94 +1688,205 @@ export function transitionWorkflow(params: {
   action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision';
   user: AuthUser;
   comment?: string;
+  approverName?: string;
+  approverTitle?: string;
 }): MonthlyReportFull {
-  const report = getReportById(params.reportId);
-  if (!report) throw new Error('التقرير غير موجود');
-
   const { user, action, comment = '' } = params;
-  const now = new Date().toISOString();
-  const fromStatus = report.status;
-  let toStatus: ReportStatus = fromStatus;
-
-  // Enforce strict RBAC + state machine transitions
-  if (action === 'submit_review') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER] as UserRole[]).includes(user.role)) {
-      throw new Error('صلاحية تقديم التقرير للمراجعة مخصصة لمعد التقرير أو مدير النظام فقط');
-    }
-    if (fromStatus !== REPORT_STATUSES.DRAFT) throw new Error('يمكن تقديم التقرير للمراجعة من حالة المسودة فقط');
-    if (!report.preparerName.trim() || !report.preparerTitle.trim()) {
-      throw new Error('يجب استكمال اسم معد التقرير والمسمى الوظيفي قبل التقديم للمراجعة');
-    }
-    toStatus = REPORT_STATUSES.READY_FOR_REVIEW;
-  } else if (action === 'start_review') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
-      throw new Error('صلاحية بدء المراجعة مخصصة للمراجع أو مدير النظام فقط');
-    }
-    if (fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) throw new Error('التقرير ليس في حالة جاهز للمراجعة');
-    toStatus = REPORT_STATUSES.UNDER_REVIEW;
-  } else if (action === 'forward_approval') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
-      throw new Error('صلاحية رفع التقرير للاعتماد مخصصة للمراجع أو مدير النظام فقط');
-    }
-    if (fromStatus !== REPORT_STATUSES.UNDER_REVIEW && fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) {
-      throw new Error('يجب أن يكون التقرير قيد المراجعة لرفعه للاعتماد');
-    }
-    toStatus = REPORT_STATUSES.PENDING_APPROVAL;
-  } else if (action === 'return_revision') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
-      throw new Error('لا تملك صلاحية إرجاع التقرير للتعديل');
-    }
-    if (
-      !(
-        [
-          REPORT_STATUSES.READY_FOR_REVIEW,
-          REPORT_STATUSES.UNDER_REVIEW,
-          REPORT_STATUSES.PENDING_APPROVAL,
-        ] as ReportStatus[]
-      ).includes(fromStatus)
-    ) {
-      throw new Error('لا يمكن إرجاع التقرير في حالته الحالية');
-    }
-    if (!comment.trim()) {
-      throw new Error('يجب كتابة سبب الإرجاع للتعديل');
-    }
-    toStatus = REPORT_STATUSES.DRAFT;
-  } else if (action === 'approve') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
-      throw new Error('صلاحية الاعتماد النهائي مخصصة للمعتمد أو مدير النظام فقط');
-    }
-    if (fromStatus !== REPORT_STATUSES.PENDING_APPROVAL) {
-      throw new Error('يجب أن يكون التقرير في حالة بانتظار الاعتماد قبل اعتماده رسمياً');
-    }
-    if (!report.preparerName.trim()) {
-      throw new Error('حقل معد التقرير إلزامي قبل الاعتماد');
-    }
-    toStatus = REPORT_STATUSES.APPROVED;
-  } else if (action === 'archive') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
-      throw new Error('صلاحية الأرشفة مخصصة للمعتمد أو مدير النظام فقط');
-    }
-    if (fromStatus !== REPORT_STATUSES.APPROVED) {
-      throw new Error('لا يمكن أرشفة تقرير غير معتمد');
-    }
-    toStatus = REPORT_STATUSES.ARCHIVED;
-  } else if (action === 'create_revision') {
-    if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
-      throw new Error('لا تملك صلاحية فتح إصدار جديد للتصحيح');
-    }
-    if (fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
-      throw new Error('يُفتح إصدار جديد للتصحيح فقط بعد الاعتماد أو الأرشفة');
-    }
-    if (!comment.trim()) {
-      throw new Error('يرجى إدخال سبب فتح الإصدار الجديد');
-    }
-    toStatus = REPORT_STATUSES.DRAFT;
-  }
-
-  const sigToken = createSignatureToken(user.id, report.id, report.currentVersion, action);
 
   db.exec('BEGIN IMMEDIATE');
   try {
+    const report = getReportById(params.reportId);
+    if (!report) throw new DomainError('التقرير غير موجود', 404);
+
+    const now = new Date().toISOString();
+    const fromStatus = report.status;
+    let toStatus: ReportStatus = fromStatus;
+
+    // Enforce strict RBAC + state machine transitions + Dual Signature Gate
+    if (action === 'submit_review') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('صلاحية تقديم التقرير للمراجعة مخصصة لمعد التقرير أو مدير النظام فقط', 403);
+      }
+      if (fromStatus !== REPORT_STATUSES.DRAFT) {
+        throw new DomainError('يمكن إرسال التقرير للاعتماد من حالة المسودة فقط', 400);
+      }
+      if (!report.preparerName.trim() || !report.preparerTitle.trim()) {
+        throw new DomainError('يجب استكمال اسم معد التقرير والمسمى الوظيفي قبل الإرسال للاعتماد', 400);
+      }
+      const submitValidation = validateReportCompleteness(report, {
+        stage: 'submit_review',
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        user,
+      });
+      if (!submitValidation.isComplete) {
+        const firstMsg = submitValidation.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة';
+        throw new DomainError(
+          `تعذر إرسال التقرير للاعتماد لوجود بيانات غير مكتملة (${submitValidation.missingRequiredFields} حقول): ${firstMsg}`,
+          400,
+          submitValidation
+        );
+      }
+      toStatus = REPORT_STATUSES.PENDING_APPROVAL;
+    } else if (action === 'start_review') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('صلاحية بدء المراجعة مخصصة للمراجع أو مدير النظام فقط', 403);
+      }
+      if (fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) {
+        throw new DomainError('التقرير ليس في حالة جاهز للمراجعة', 400);
+      }
+      const startValidation = validateReportCompleteness(report, {
+        stage: 'start_review',
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        user,
+      });
+      if (!startValidation.isComplete) {
+        throw new DomainError(
+          `تعذر بدء المراجعة لوجود بيانات غير مكتملة (${startValidation.missingRequiredFields} حقول)`,
+          400,
+          startValidation
+        );
+      }
+      toStatus = REPORT_STATUSES.UNDER_REVIEW;
+    } else if (action === 'forward_approval') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('صلاحية رفع التقرير للاعتماد مخصصة للمراجع أو مدير النظام فقط', 403);
+      }
+      if (fromStatus !== REPORT_STATUSES.UNDER_REVIEW && fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW) {
+        throw new DomainError('يجب أن يكون التقرير قيد المراجعة لرفعه للاعتماد', 400);
+      }
+      const fwdValidation = validateReportCompleteness(report, {
+        stage: 'forward_approval',
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        user,
+      });
+      if (!fwdValidation.isComplete) {
+        throw new DomainError(
+          `تعذر رفع التقرير للاعتماد لوجود بيانات غير مكتملة (${fwdValidation.missingRequiredFields} حقول)`,
+          400,
+          fwdValidation
+        );
+      }
+      toStatus = REPORT_STATUSES.PENDING_APPROVAL;
+    } else if (action === 'return_revision') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.REVIEWER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('لا تملك صلاحية إرجاع التقرير للتعديل', 403);
+      }
+      if (
+        !(
+          [
+            REPORT_STATUSES.READY_FOR_REVIEW,
+            REPORT_STATUSES.UNDER_REVIEW,
+            REPORT_STATUSES.PENDING_APPROVAL,
+          ] as ReportStatus[]
+        ).includes(fromStatus)
+      ) {
+        throw new DomainError('لا يمكن إرجاع التقرير في حالته الحالية', 400);
+      }
+      if (!comment.trim()) {
+        throw new DomainError('يجب كتابة سبب الإرجاع للتعديل', 400);
+      }
+      toStatus = REPORT_STATUSES.DRAFT;
+    } else if (action === 'approve') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('صلاحية الاعتماد النهائي مخصصة للمعتمد أو مدير النظام فقط', 403);
+      }
+      if (fromStatus === REPORT_STATUSES.APPROVED || fromStatus === REPORT_STATUSES.ARCHIVED) {
+        throw new DomainError('التقرير معتمد مسبقاً ولا يمكن إعادة اعتماده مرتين', 409);
+      }
+      if (
+        fromStatus !== REPORT_STATUSES.PENDING_APPROVAL &&
+        fromStatus !== REPORT_STATUSES.READY_FOR_REVIEW &&
+        fromStatus !== REPORT_STATUSES.UNDER_REVIEW
+      ) {
+        throw new DomainError('يجب أن يكون التقرير في حالة بانتظار الاعتماد قبل اعتماده رسمياً', 400);
+      }
+
+      // Prevent duplicate version approval inside transaction
+      const existingVersion = db
+        .prepare('SELECT id FROM report_versions WHERE report_id = ? AND version_number = ?')
+        .get(report.id, report.currentVersion) as { id: string } | undefined;
+      if (existingVersion) {
+        throw new DomainError('تم توثيق اعتماد هذا الإصدار مسبقاً في السجل الدائم', 409);
+      }
+
+      // STRICT SERVER-SIDE COMPLETENESS + DUAL SIGNATURE GATE
+      const effectiveApproverNameForCheck = (params.approverName ?? report.approverName).trim() || user.fullName;
+      const effectiveApproverTitleForCheck = (params.approverTitle ?? report.approverTitle).trim() || user.jobTitle;
+      const reportForCheck: MonthlyReportFull = {
+        ...report,
+        approverName: effectiveApproverNameForCheck,
+        approverTitle: effectiveApproverTitleForCheck,
+      };
+
+      const approveValidation = validateReportCompleteness(reportForCheck, {
+        stage: 'approve',
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        user,
+      });
+      if (!approveValidation.dataIsComplete) {
+        const firstMsg = approveValidation.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة';
+        throw new DomainError(
+          `تعذر استكمال إجراء الاعتماد لوجود بيانات إلزامية غير مكتملة (${approveValidation.missingRequiredFields} حقول): ${firstMsg}`,
+          400,
+          approveValidation
+        );
+      }
+
+      const evalResult = evaluateDualSignatureApproval(reportForCheck, user);
+      if (!evalResult.hasValidPreparerSignature || !evalResult.hasValidApproverSignature) {
+        const missingParts: string[] = [];
+        if (!evalResult.hasValidPreparerSignature) {
+          missingParts.push(evalResult.preparer.reason || 'توقيع معد التقرير');
+        }
+        if (!evalResult.hasValidApproverSignature) {
+          missingParts.push(evalResult.approver.reason || 'توقيع معتمد التقرير');
+        }
+        throw new DomainError(
+          `لا يمكن اعتماد التقرير نهائياً قبل استكمال توقيع معد التقرير وتوقيع معتمد التقرير (${missingParts.join(' · ')})`,
+          400,
+          approveValidation
+        );
+      }
+
+      if (!report.preparerName.trim()) {
+        throw new DomainError('حقل معد التقرير إلزامي قبل الاعتماد', 400, approveValidation);
+      }
+      if (!evalResult.canApproveReport) {
+        throw new DomainError(
+          evalResult.blockingReasons[0] || 'لم تكتمل شروط الاعتماد الإلزامية بالتوقيع المزدوج',
+          400,
+          approveValidation
+        );
+      }
+
+      toStatus = REPORT_STATUSES.APPROVED;
+    } else if (action === 'archive') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('صلاحية الأرشفة مخصصة للمعتمد أو مدير النظام فقط', 403);
+      }
+      if (fromStatus !== REPORT_STATUSES.APPROVED) {
+        throw new DomainError('لا يمكن أرشفة تقرير غير معتمد', 400);
+      }
+      toStatus = REPORT_STATUSES.ARCHIVED;
+    } else if (action === 'create_revision') {
+      if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
+        throw new DomainError('لا تملك صلاحية فتح إصدار جديد للتصحيح', 403);
+      }
+      if (fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
+        throw new DomainError('يُفتح إصدار جديد للتصحيح فقط بعد الاعتماد أو الأرشفة', 400);
+      }
+      if (!comment.trim()) {
+        throw new DomainError('يرجى إدخال سبب فتح الإصدار الجديد', 400);
+      }
+      toStatus = REPORT_STATUSES.DRAFT;
+    }
+
+    const sigToken = createSignatureToken(user.id, report.id, report.currentVersion, action);
+
     if (action === 'submit_review') {
       const effectivePreparedAt = report.preparedAt || now;
       db.prepare(
@@ -1606,11 +1900,29 @@ export function transitionWorkflow(params: {
       db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
     } else if (action === 'approve') {
       const effectiveApprovedAt = report.approvedAt || now;
-      db.prepare(
-        'UPDATE monthly_reports SET status = ?, approver_id = ?, approver_name = ?, approver_title = ?, approved_at = ?, approver_signature_hash = ?, updated_at = ? WHERE id = ?'
-      ).run(toStatus, user.id, user.fullName, user.jobTitle, effectiveApprovedAt, sigToken, now, report.id);
+      const effectiveApproverName = (params.approverName ?? report.approverName).trim() || user.fullName;
+      const effectiveApproverTitle = (params.approverTitle ?? report.approverTitle).trim() || user.jobTitle;
+      const updRes = db
+        .prepare(
+          `UPDATE monthly_reports
+           SET status = ?, approver_id = ?, approver_name = ?, approver_title = ?, approved_at = ?, approver_signature_hash = ?, updated_at = ?
+           WHERE id = ? AND status IN ('pending_approval', 'ready_for_review', 'under_review')`
+        )
+        .run(
+          toStatus,
+          user.id,
+          effectiveApproverName,
+          effectiveApproverTitle,
+          effectiveApprovedAt,
+          sigToken,
+          now,
+          report.id
+        );
+      if (Number(updRes.changes) === 0) {
+        throw new DomainError('تغيرت حالة التقرير أثناء التنفيذ ولا يمكن إتمام الاعتماد المكرر', 409);
+      }
 
-      // Build immutable official snapshot
+      // Build immutable official snapshot preserving BOTH electronic signatures & timestamps
       const updatedForSnapshot = getReportById(report.id)!;
       const sites = getAllSites();
       const categories = getAllCategories();
@@ -1621,7 +1933,9 @@ export function transitionWorkflow(params: {
         categories,
         thresholds,
         approvedAt: effectiveApprovedAt,
-        approvedBy: { id: user.id, fullName: user.fullName, jobTitle: user.jobTitle },
+        preparerSignedAt: updatedForSnapshot.preparerSignedAt ?? updatedForSnapshot.preparedAt,
+        approverSignedAt: updatedForSnapshot.approverSignedAt ?? effectiveApprovedAt,
+        approvedBy: { id: user.id, fullName: effectiveApproverName, jobTitle: effectiveApproverTitle },
         signatureToken: sigToken,
       };
       db.prepare(
@@ -1632,7 +1946,7 @@ export function transitionWorkflow(params: {
         report.currentVersion,
         JSON.stringify(snapshotPayload),
         user.id,
-        user.fullName,
+        effectiveApproverName,
         sigToken,
         now
       );
@@ -1640,7 +1954,18 @@ export function transitionWorkflow(params: {
       db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
     } else if (action === 'create_revision') {
       db.prepare(
-        'UPDATE monthly_reports SET status = ?, current_version = current_version + 1, approved_at = NULL, approver_signature_hash = NULL, updated_at = ? WHERE id = ?'
+        `UPDATE monthly_reports
+         SET status = ?,
+             current_version = current_version + 1,
+             approved_at = NULL,
+             approver_signature_hash = NULL,
+             approver_signature_image = NULL,
+             approver_signed_at = NULL,
+             approver_signed_by_id = NULL,
+             approver_signed_by_name = NULL,
+             approver_signature_status = 'valid',
+             updated_at = ?
+         WHERE id = ?`
       ).run(toStatus, now, report.id);
     }
 
@@ -1685,7 +2010,7 @@ export function transitionWorkflow(params: {
     throw err;
   }
 
-  return getReportById(report.id)!;
+  return getReportById(params.reportId)!;
 }
 
 export function getReportHistory(reportId: string): {

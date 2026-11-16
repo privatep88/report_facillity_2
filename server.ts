@@ -23,6 +23,10 @@ import {
   verifyToken,
 } from './server/db.ts';
 import { generateMonthlyReportExcel } from './server/excelExport.ts';
+import { generateExecutiveAnalyticsExcel } from './server/analyticsExcelExport.ts';
+import { generateMonthlyReportPdf } from './server/pdfExport.ts';
+import { generateExecutiveAnalyticsPdf } from './server/analyticsPdfExport.ts';
+import { DEFAULT_ANALYTICS_FILTERS, type AnalyticsFilters } from './src/services/AnalyticsEngineService.ts';
 import type { AuthUser, MonthlyReportFull, PerformanceThresholds, UserRole } from './src/types/report.ts';
 import { USER_ROLES } from './src/types/report.ts';
 
@@ -235,6 +239,78 @@ async function startServer() {
     });
   });
 
+  app.post('/api/analytics/export/excel', async (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as { filters?: Partial<AnalyticsFilters> };
+      const filters: AnalyticsFilters = {
+        ...DEFAULT_ANALYTICS_FILTERS,
+        ...(body.filters || {}),
+      };
+      const summaries = listReportsSummary();
+      const fullReports: MonthlyReportFull[] = [];
+      for (const s of summaries) {
+        const full = getReportById(s.id);
+        if (full) fullReports.push(full);
+      }
+
+      const xlsxBuffer = await generateExecutiveAnalyticsExcel({
+        reports: fullReports,
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        thresholds: getThresholds(),
+        filters,
+      });
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fileName = `SAAED_FM_Executive_Analytics_${stamp}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(xlsxBuffer);
+    } catch (err) {
+      console.error('Analytics Excel export failed:', err);
+      res.status(500).json({ error: 'تعذر إنشاء ملف التحليلات التنفيذية بصيغة Excel' });
+    }
+  });
+
+  app.post('/api/analytics/export/pdf', async (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        filters?: Partial<AnalyticsFilters>;
+        orientation?: 'landscape' | 'portrait';
+      };
+      const filters: AnalyticsFilters = {
+        ...DEFAULT_ANALYTICS_FILTERS,
+        ...(body.filters || {}),
+      };
+      const orientation = body.orientation === 'portrait' ? 'portrait' : 'landscape';
+
+      const summaries = listReportsSummary();
+      const fullReports: MonthlyReportFull[] = [];
+      for (const s of summaries) {
+        const full = getReportById(s.id);
+        if (full) fullReports.push(full);
+      }
+
+      const pdfBuffer = await generateExecutiveAnalyticsPdf({
+        reports: fullReports,
+        sites: getAllSites(),
+        categories: getAllCategories(),
+        thresholds: getThresholds(),
+        filters,
+        orientation,
+      });
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fileName = `SAAED_FM_Executive_Analytics_${stamp}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      console.error('Analytics PDF export failed:', err);
+      res.status(500).json({ error: 'تعذر إنشاء ملف التحليلات التنفيذية بصيغة PDF' });
+    }
+  });
+
   app.get('/api/reports/:id', (req: Request, res: Response) => {
     const report = getReportById(req.params.id);
     if (!report) {
@@ -315,7 +391,12 @@ async function startServer() {
       const history = getReportHistory(updated.id);
       res.json({ report: updated, history });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر حفظ التوقيع' });
+      const domainErr = err as { statusCode?: number; validation?: unknown };
+      const status = domainErr.statusCode || 400;
+      res.status(status).json({
+        error: err instanceof Error ? err.message : 'تعذر حفظ التوقيع',
+        validation: domainErr.validation,
+      });
     }
   });
 
@@ -338,13 +419,14 @@ async function startServer() {
       const history = getReportHistory(updated.id);
       res.json({ report: updated, history });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'تعذر حفظ التاريخ' });
+      const status = (err as { statusCode?: number }).statusCode || 400;
+      res.status(status).json({ error: err instanceof Error ? err.message : 'تعذر حفظ التاريخ' });
     }
   });
 
   app.post('/api/reports/:id/workflow', requireAuth, (req: AuthedRequest, res: Response) => {
     try {
-      const { action, comment } = req.body as {
+      const { action, comment, approverName, approverTitle } = req.body as {
         action:
           | 'submit_review'
           | 'start_review'
@@ -354,17 +436,26 @@ async function startServer() {
           | 'archive'
           | 'create_revision';
         comment?: string;
+        approverName?: string;
+        approverTitle?: string;
       };
       const updated = transitionWorkflow({
         reportId: req.params.id,
         action,
         user: req.authUser!,
         comment,
+        approverName,
+        approverTitle,
       });
       const history = getReportHistory(updated.id);
       res.json({ report: updated, history });
     } catch (err) {
-      res.status(403).json({ error: err instanceof Error ? err.message : 'تعذر تنفيذ إجراء الاعتماد' });
+      const domainErr = err as { statusCode?: number; validation?: unknown };
+      const status = domainErr.statusCode || 400;
+      res.status(status).json({
+        error: err instanceof Error ? err.message : 'تعذر تنفيذ إجراء الاعتماد',
+        validation: domainErr.validation,
+      });
     }
   });
 
@@ -417,6 +508,63 @@ async function startServer() {
     } catch (err) {
       console.error('Excel export failed:', err);
       res.status(500).json({ error: 'حدث خطأ أثناء إنشاء ملف Excel' });
+    }
+  });
+
+  // === Official Searchable PDF Export Engine ===
+  app.get('/api/reports/:id/export/pdf', async (req: Request, res: Response) => {
+    try {
+      const versionParam = req.query.version ? Number(req.query.version) : null;
+      const orientation = req.query.orientation === 'portrait' ? 'portrait' : 'landscape';
+      let reportData: MonthlyReportFull | null = null;
+      let sites = getAllSites();
+      let categories = getAllCategories();
+      let thresholds = getThresholds();
+      let resolvedVersion: number | null = null;
+
+      if (versionParam && Number.isFinite(versionParam)) {
+        const verRow = db
+          .prepare('SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version_number = ?')
+          .get(req.params.id, versionParam) as { snapshot_json: string } | undefined;
+        if (verRow) {
+          const snap = JSON.parse(verRow.snapshot_json) as {
+            report: MonthlyReportFull;
+            sites?: typeof sites;
+            categories?: typeof categories;
+            thresholds?: typeof thresholds;
+          };
+          reportData = snap.report;
+          if (snap.sites) sites = snap.sites;
+          if (snap.categories) categories = snap.categories;
+          if (snap.thresholds) thresholds = snap.thresholds;
+          resolvedVersion = versionParam;
+        }
+      }
+
+      if (!reportData) {
+        reportData = getReportById(req.params.id);
+      }
+      if (!reportData) {
+        res.status(404).json({ error: 'التقرير غير موجود' });
+        return;
+      }
+
+      const pdfBuffer = await generateMonthlyReportPdf({
+        report: reportData,
+        sites,
+        categories,
+        thresholds,
+        orientation,
+        snapshotVersion: resolvedVersion,
+      });
+
+      const fileName = `${reportData.reportNumber}_v${resolvedVersion || reportData.currentVersion}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      res.status(500).json({ error: 'حدث خطأ أثناء إنشاء ملف PDF الرسمي' });
     }
   });
 
@@ -562,7 +710,11 @@ async function startServer() {
   // === Vite Middleware / Static Serving ===
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

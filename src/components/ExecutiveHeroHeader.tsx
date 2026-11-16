@@ -13,9 +13,12 @@ import {
 import type { AuthUser, MonthlyReportFull, ReportListSummary } from '../types/report.ts';
 import { ROLE_LABELS_AR, STATUS_LABELS_AR, USER_ROLES } from '../types/report.ts';
 import { formatDateWestern, getMonthNameAr } from '../utils/calculations.ts';
+import { NotificationCenter } from '../notifications/NotificationCenter.tsx';
+import { useNotification } from '../notifications/NotificationProvider.tsx';
+import type { NotificationNavigationTarget } from '../notifications/types.ts';
 import { SaaedExecutiveHeader } from './SaaedExecutiveHeader.tsx';
 
-export type AppTab = 'report' | 'analytics' | 'archive';
+export type AppTab = 'report' | 'archive' | 'drafts' | 'analytics';
 
 interface ExecutiveHeroHeaderProps {
   activeTab: AppTab;
@@ -30,6 +33,7 @@ interface ExecutiveHeroHeaderProps {
   onOpenAdminSettings: () => void;
   approvedCount: number;
   onOpenMobileMenu: () => void;
+  onNavigateNotificationTarget: (target: NotificationNavigationTarget) => void;
 }
 
 export const ExecutiveHeroHeader: React.FC<ExecutiveHeroHeaderProps> = ({
@@ -42,8 +46,10 @@ export const ExecutiveHeroHeader: React.FC<ExecutiveHeroHeaderProps> = ({
   onLogout,
   onOpenAdminSettings,
   onOpenMobileMenu,
+  onNavigateNotificationTarget,
 }) => {
   const canCreate = user && (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.PREPARER);
+  const { snapshot, markHistoryAsRead, markAllHistoryAsRead, clearHistory } = useNotification();
 
   return (
     <div className="no-print">
@@ -125,8 +131,17 @@ export const ExecutiveHeroHeader: React.FC<ExecutiveHeroHeaderProps> = ({
           </span>
         </div>
 
-        {/* Visual LEFT (RTL End): System badges, Settings & Auth actions */}
+        {/* Visual LEFT (RTL End): Notification Center, Settings & Auth actions */}
         <div className="flex items-center gap-2 shrink-0">
+          <NotificationCenter
+            history={snapshot.history}
+            user={user}
+            onMarkRead={markHistoryAsRead}
+            onMarkAllRead={() => markAllHistoryAsRead(user?.role)}
+            onClearHistory={clearHistory}
+            onNavigateTarget={onNavigateNotificationTarget}
+          />
+
           {user?.role === USER_ROLES.ADMIN && (
             <button
               type="button"
