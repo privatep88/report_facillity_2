@@ -1,17 +1,60 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 76 76" role="img" aria-label="SAAED Facilities Management">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#052C52" />
-      <stop offset="100%" stop-color="#011C38" />
+    <linearGradient id="saaedFaviconBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06325E" />
+      <stop offset="55%" stop-color="#042241" />
+      <stop offset="100%" stop-color="#01152B" />
     </linearGradient>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="saaedGoldEmblem" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#F5D98A" />
       <stop offset="55%" stop-color="#DFB357" />
-      <stop offset="100%" stop-color="#A97B27" />
+      <stop offset="100%" stop-color="#BE8E33" />
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="url(#bg)" stroke="url(#gold)" stroke-width="2.5" />
-  <path d="M16 48V24L28 19V48" fill="none" stroke="url(#gold)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" />
-  <path d="M28 48V13L44 18V48" fill="none" stroke="url(#gold)" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" />
-  <line x1="12" y1="48" x2="52" y2="48" stroke="url(#gold)" stroke-width="3" stroke-linecap="round" />
+  <rect x="2" y="2" width="72" height="72" rx="16" fill="url(#saaedFaviconBg)" stroke="url(#saaedGoldEmblem)" stroke-width="2.5" />
+  <g transform="translate(3, 4)">
+    <path
+      d="M11 61V24L25 18V61"
+      fill="none"
+      stroke="url(#saaedGoldEmblem)"
+      stroke-width="2.6"
+      stroke-linejoin="round"
+      stroke-linecap="round"
+    />
+    <path
+      d="M25 61V9L43 15V42"
+      fill="none"
+      stroke="url(#saaedGoldEmblem)"
+      stroke-width="2.8"
+      stroke-linejoin="round"
+      stroke-linecap="round"
+    />
+    <path
+      d="M5 61V37H11"
+      fill="none"
+      stroke="url(#saaedGoldEmblem)"
+      stroke-width="2.4"
+      stroke-linejoin="round"
+      stroke-linecap="round"
+    />
+    <g stroke="url(#saaedGoldEmblem)" stroke-width="2.2" stroke-linecap="round">
+      <line x1="16" y1="28" x2="16" y2="33" />
+      <line x1="20" y1="26" x2="20" y2="31" />
+      <line x1="16" y1="38" x2="16" y2="43" />
+      <line x1="20" y1="36" x2="20" y2="41" />
+      <line x1="16" y1="48" x2="16" y2="53" />
+      <line x1="20" y1="46" x2="20" y2="51" />
+      <line x1="30" y1="18" x2="30" y2="23" />
+      <line x1="36" y1="20" x2="36" y2="25" />
+      <line x1="30" y1="28" x2="30" y2="33" />
+      <line x1="36" y1="30" x2="36" y2="35" />
+      <line x1="30" y1="38" x2="30" y2="43" />
+      <line x1="36" y1="40" x2="36" y2="45" />
+    </g>
+    <path
+      fill-rule="evenodd"
+      fill="url(#saaedGoldEmblem)"
+      d="M48.5 34.5L52.5 34.5L53.4 38.1C54.6 38.4 55.7 38.9 56.7 39.5L59.9 37.6L62.7 40.4L60.8 43.6C61.4 44.6 61.9 45.7 62.2 46.9L65.8 47.8V51.8L62.2 52.7C61.9 53.9 61.4 55.0 60.8 56.0L62.7 59.2L59.9 62.0L56.7 60.1C55.7 60.7 54.6 61.2 53.4 61.5L52.5 65.1H48.5L47.6 61.5C46.4 61.2 45.3 60.7 44.3 60.1L41.1 62.0L38.3 59.2L40.2 56.0C39.6 55.0 39.1 53.9 38.8 52.7L35.2 51.8V47.8L38.8 46.9C39.1 45.7 39.6 44.6 40.2 43.6L38.3 40.4L41.1 37.6L44.3 39.5C45.3 38.9 46.4 38.4 47.6 38.1L48.5 34.5ZM50.5 43.3C46.9 43.3 44.0 46.2 44.0 49.8C44.0 53.4 46.9 56.3 50.5 56.3C54.1 56.3 57.0 53.4 57.0 49.8C57.0 46.2 54.1 43.3 50.5 43.3Z"
+    />
+  </g>
 </svg>

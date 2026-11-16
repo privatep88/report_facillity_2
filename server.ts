@@ -132,8 +132,14 @@ async function startServer() {
     next();
   });
 
-  app.get('/favicon.ico', (_req: Request, res: Response) => {
+  app.get(['/favicon.ico', '/report_facillity_2/favicon.ico'], (_req: Request, res: Response) => {
     res.redirect(302, '/favicon.svg');
+  });
+
+  app.get(['/favicon.svg', '/report_facillity_2/favicon.svg'], (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(path.resolve(process.cwd(), 'public', 'favicon.svg'));
   });
 
   app.use(express.json({ limit: '5mb' }));

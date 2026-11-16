@@ -25,7 +25,8 @@ const configuredApiBase = (
 let staticModeDetected =
   typeof window !== 'undefined' &&
   !configuredApiBase &&
-  window.location.hostname.toLowerCase().endsWith('.github.io');
+  (window.location.hostname.toLowerCase().endsWith('.github.io') ||
+    window.location.pathname.startsWith('/report_facillity_2'));
 
 export function isStaticBackendUnavailable(): boolean {
   return staticModeDetected;
