@@ -113,6 +113,29 @@ function requireRole(allowed: UserRole[]) {
 
 async function startServer() {
   const app = express();
+
+  // Safe CORS support for separate frontend deployments (e.g. GitHub Pages -> Express API)
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  app.get('/favicon.ico', (_req: Request, res: Response) => {
+    res.redirect(302, '/favicon.svg');
+  });
+
   app.use(express.json({ limit: '5mb' }));
   app.use(attachAuth);
 
@@ -707,6 +730,14 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  // Explicit JSON 404 for any unmatched /api/* route so it never falls through to SPA index.html
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({
+      error: `مسار واجهة البرمجة غير موجود (${req.method} ${req.originalUrl})`,
+      status: 404,
+    });
+  });
+
   // === Vite Middleware / Static Serving ===
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -720,6 +751,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(process.cwd(), 'dist');
+    app.use('/report_facillity_2', express.static(distPath));
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

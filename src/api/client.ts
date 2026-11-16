@@ -10,10 +10,38 @@ import type {
   ReportVersionSummary,
   UserRole,
 } from '../types/report.ts';
+import { staticFallbackApi } from './staticFallbackStore.ts';
 
 const TOKEN_STORAGE_KEY = 'saaed_fm_session_token';
 let memoryToken: string | null = null;
 const unauthorizedListeners = new Set<() => void>();
+
+const configuredApiBase = (
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL || ''
+)
+  .trim()
+  .replace(/\/+$/, '');
+
+let staticModeDetected =
+  typeof window !== 'undefined' &&
+  !configuredApiBase &&
+  window.location.hostname.toLowerCase().endsWith('.github.io');
+
+export function isStaticBackendUnavailable(): boolean {
+  return staticModeDetected;
+}
+
+export function markStaticBackendUnavailable(): void {
+  staticModeDetected = true;
+}
+
+export function resolveApiUrl(path: string): string {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  if (configuredApiBase) {
+    return `${configuredApiBase}${cleanPath}`;
+  }
+  return cleanPath;
+}
 
 export function getStoredToken(): string | null {
   if (memoryToken) return memoryToken;
@@ -58,7 +86,16 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit,
+  staticFallback?: () => Promise<T>
+): Promise<T> {
+  if (staticModeDetected && staticFallback) {
+    return staticFallback();
+  }
+
+  const url = resolveApiUrl(path);
   const token = getStoredToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -66,11 +103,32 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...((options?.headers as Record<string, string>) || {}),
   };
 
-  const res = await fetch(url, {
-    credentials: 'include',
-    ...options,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      ...options,
+      headers,
+    });
+  } catch (networkErr) {
+    if (staticFallback && !configuredApiBase) {
+      staticModeDetected = true;
+      return staticFallback();
+    }
+    throw networkErr;
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+  // If a static host returns 404 or an HTML SPA fallback page for /api/*, switch to static store
+  if (
+    staticFallback &&
+    !configuredApiBase &&
+    (res.status === 404 || res.status === 405 || contentType.includes('text/html'))
+  ) {
+    staticModeDetected = true;
+    return staticFallback();
+  }
 
   if (!res.ok) {
     let msg = 'حدث خطأ غير متوقع في الخادم';
@@ -80,7 +138,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       msg = res.statusText || msg;
     }
-    if (res.status === 401 && !url.includes('/api/auth/login')) {
+    if (res.status === 401 && !path.includes('/api/auth/login')) {
       setStoredToken(null);
       unauthorizedListeners.forEach((cb) => cb());
     }
@@ -107,24 +165,43 @@ export interface DemoAccount {
 }
 
 export const api = {
-  bootstrap: () => request<BootstrapResponse>('/api/bootstrap'),
-  getDemoAccounts: () => request<{ accounts: DemoAccount[] }>('/api/auth/demo-accounts'),
+  bootstrap: () =>
+    request<BootstrapResponse>('/api/bootstrap', undefined, () => staticFallbackApi.bootstrap()),
+
+  getDemoAccounts: () =>
+    request<{ accounts: DemoAccount[] }>('/api/auth/demo-accounts', undefined, () =>
+      staticFallbackApi.getDemoAccounts()
+    ),
+
   login: async (email: string, password: string) => {
-    const res = await request<{ user: AuthUser; token?: string }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+    const res = await request<{ user: AuthUser; token?: string }>(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      },
+      () => staticFallbackApi.login(email, password)
+    );
     if (res.token) {
       setStoredToken(res.token);
     }
     return res;
   },
+
   logout: async () => {
     setStoredToken(null);
-    return request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+    return request<{ ok: boolean }>(
+      '/api/auth/logout',
+      { method: 'POST' },
+      () => staticFallbackApi.logout()
+    );
   },
 
-  listReports: () => request<{ reports: ReportListSummary[] }>('/api/reports'),
+  listReports: () =>
+    request<{ reports: ReportListSummary[] }>('/api/reports', undefined, () =>
+      staticFallbackApi.listReports()
+    ),
+
   getReport: (id: string) =>
     request<{
       report: MonthlyReportFull;
@@ -133,7 +210,8 @@ export const api = {
         auditLogs: AuditLogEntry[];
         versions: ReportVersionSummary[];
       };
-    }>(`/api/reports/${encodeURIComponent(id)}`),
+    }>(`/api/reports/${encodeURIComponent(id)}`, undefined, () => staticFallbackApi.getReport(id)),
+
   getReportVersionSnapshot: (id: string, versionNumber: number) =>
     request<{
       snapshot: {
@@ -145,17 +223,21 @@ export const api = {
       createdAt: string;
       signatureToken: string;
       approvedByName: string;
-    }>(`/api/reports/${encodeURIComponent(id)}/versions/${versionNumber}`),
+    }>(`/api/reports/${encodeURIComponent(id)}/versions/${versionNumber}`, undefined, () =>
+      staticFallbackApi.getReportVersionSnapshot(id, versionNumber)
+    ),
+
   getAllAnalytics: () =>
     request<{
       reports: MonthlyReportFull[];
       sites: MaintenanceSite[];
       categories: MaintenanceCategory[];
       thresholds: PerformanceThresholds;
-    }>('/api/analytics/all'),
+    }>('/api/analytics/all', undefined, () => staticFallbackApi.getAllAnalytics()),
+
   exportAnalyticsExcel: async (filters: Record<string, string>) => {
     const token = getStoredToken();
-    const res = await fetch('/api/analytics/export/excel', {
+    const res = await fetch(resolveApiUrl('/api/analytics/export/excel'), {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -171,10 +253,15 @@ export const api = {
   },
 
   createReport: (payload: { year: number; month: number; department: string }) =>
-    request<{ report: MonthlyReportFull }>('/api/reports', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+    request<{ report: MonthlyReportFull }>(
+      '/api/reports',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      () => staticFallbackApi.createReport(payload)
+    ),
+
   saveReport: (id: string, report: MonthlyReportFull) =>
     request<{
       report: MonthlyReportFull;
@@ -183,10 +270,15 @@ export const api = {
         auditLogs: AuditLogEntry[];
         versions: ReportVersionSummary[];
       };
-    }>(`/api/reports/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      body: JSON.stringify(report),
-    }),
+    }>(
+      `/api/reports/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(report),
+      },
+      () => staticFallbackApi.saveReport(id, report)
+    ),
+
   saveSignature: (id: string, target: 'preparer' | 'approver', signatureImage: string | null) =>
     request<{
       report: MonthlyReportFull;
@@ -195,10 +287,15 @@ export const api = {
         auditLogs: AuditLogEntry[];
         versions: ReportVersionSummary[];
       };
-    }>(`/api/reports/${encodeURIComponent(id)}/signature`, {
-      method: 'PUT',
-      body: JSON.stringify({ target, signatureImage }),
-    }),
+    }>(
+      `/api/reports/${encodeURIComponent(id)}/signature`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ target, signatureImage }),
+      },
+      () => staticFallbackApi.saveSignature(id, target, signatureImage)
+    ),
+
   saveDate: (id: string, target: 'preparedAt' | 'approvedAt', dateValue: string | null) =>
     request<{
       report: MonthlyReportFull;
@@ -207,13 +304,25 @@ export const api = {
         auditLogs: AuditLogEntry[];
         versions: ReportVersionSummary[];
       };
-    }>(`/api/reports/${encodeURIComponent(id)}/date`, {
-      method: 'PUT',
-      body: JSON.stringify({ target, dateValue }),
-    }),
+    }>(
+      `/api/reports/${encodeURIComponent(id)}/date`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ target, dateValue }),
+      },
+      () => staticFallbackApi.saveDate(id, target, dateValue)
+    ),
+
   workflowAction: (
     id: string,
-    action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision',
+    action:
+      | 'submit_review'
+      | 'start_review'
+      | 'return_revision'
+      | 'forward_approval'
+      | 'approve'
+      | 'archive'
+      | 'create_revision',
     comment = '',
     approverName?: string,
     approverTitle?: string
@@ -225,42 +334,86 @@ export const api = {
         auditLogs: AuditLogEntry[];
         versions: ReportVersionSummary[];
       };
-    }>(`/api/reports/${encodeURIComponent(id)}/workflow`, {
-      method: 'POST',
-      body: JSON.stringify({ action, comment, approverName, approverTitle }),
-    }),
+    }>(
+      `/api/reports/${encodeURIComponent(id)}/workflow`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action, comment, approverName, approverTitle }),
+      },
+      () => staticFallbackApi.workflowAction(id, action, comment, approverName, approverTitle)
+    ),
 
   addSite: (nameAr: string, nameEn: string) =>
-    request<{ sites: MaintenanceSite[] }>('/api/sites', {
-      method: 'POST',
-      body: JSON.stringify({ nameAr, nameEn }),
-    }),
+    request<{ sites: MaintenanceSite[] }>(
+      '/api/sites',
+      {
+        method: 'POST',
+        body: JSON.stringify({ nameAr, nameEn }),
+      },
+      () => staticFallbackApi.addSite(nameAr, nameEn)
+    ),
+
   updateSite: (id: string, payload: { nameAr?: string; nameEn?: string; isActive?: boolean }) =>
-    request<{ sites: MaintenanceSite[] }>(`/api/sites/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
+    request<{ sites: MaintenanceSite[] }>(
+      `/api/sites/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+      () => staticFallbackApi.updateSite(id, payload)
+    ),
+
   addCategory: (nameAr: string, nameEn: string) =>
-    request<{ categories: MaintenanceCategory[] }>('/api/categories', {
-      method: 'POST',
-      body: JSON.stringify({ nameAr, nameEn }),
-    }),
+    request<{ categories: MaintenanceCategory[] }>(
+      '/api/categories',
+      {
+        method: 'POST',
+        body: JSON.stringify({ nameAr, nameEn }),
+      },
+      () => staticFallbackApi.addCategory(nameAr, nameEn)
+    ),
 
   updateThresholds: (thresholds: PerformanceThresholds) =>
-    request<{ thresholds: PerformanceThresholds }>('/api/settings/thresholds', {
-      method: 'PUT',
-      body: JSON.stringify(thresholds),
-    }),
+    request<{ thresholds: PerformanceThresholds }>(
+      '/api/settings/thresholds',
+      {
+        method: 'PUT',
+        body: JSON.stringify(thresholds),
+      },
+      () => staticFallbackApi.updateThresholds(thresholds)
+    ),
 
-  getAdminUsers: () => request<{ users: AuthUser[] }>('/api/admin/users'),
-  createAdminUser: (payload: { email: string; fullName: string; jobTitle: string; role: UserRole; password: string }) =>
-    request<{ ok: boolean }>('/api/admin/users', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  updateAdminUser: (id: string, payload: { role?: UserRole; isActive?: boolean; jobTitle?: string; fullName?: string }) =>
-    request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
+  getAdminUsers: () =>
+    request<{ users: AuthUser[] }>('/api/admin/users', undefined, () =>
+      staticFallbackApi.getAdminUsers()
+    ),
+
+  createAdminUser: (payload: {
+    email: string;
+    fullName: string;
+    jobTitle: string;
+    role: UserRole;
+    password: string;
+  }) =>
+    request<{ ok: boolean }>(
+      '/api/admin/users',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      () => staticFallbackApi.createAdminUser(payload)
+    ),
+
+  updateAdminUser: (
+    id: string,
+    payload: { role?: UserRole; isActive?: boolean; jobTitle?: string; fullName?: string }
+  ) =>
+    request<{ ok: boolean }>(
+      `/api/admin/users/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+      () => staticFallbackApi.updateAdminUser(id, payload)
+    ),
 };

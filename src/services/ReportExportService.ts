@@ -1,4 +1,11 @@
-import { getStoredToken } from '../api/client.ts';
+import {
+  getStoredToken,
+  isStaticBackendUnavailable,
+  markStaticBackendUnavailable,
+  resolveApiUrl,
+} from '../api/client.ts';
+import { staticFallbackApi } from '../api/staticFallbackStore.ts';
+import { computeReportMetrics, formatPct, getMonthNameAr } from '../utils/calculations.ts';
 
 async function verifyMagicHeader(blob: Blob, kind: 'pdf' | 'xlsx'): Promise<void> {
   if (!blob || blob.size < 100) {
@@ -48,22 +55,183 @@ export interface ExportResult {
   sizeBytes: number;
 }
 
+/**
+ * Browser-side Excel (.xlsx) generator used when the app is deployed to static
+ * hosting (e.g. GitHub Pages) without a Node.js/Express backend server.
+ */
+async function generateBrowserReportExcelFallback(
+  reportId: string,
+  versionNumber?: number | null
+): Promise<ExportResult> {
+  const ExcelJSImport = await import('exceljs');
+  const ExcelJS = ExcelJSImport.default || ExcelJSImport;
+  const { report, sites, categories, thresholds } = staticFallbackApi.getReportForExport(
+    reportId,
+    versionNumber
+  );
+  const metrics = computeReportMetrics(report, sites, categories, thresholds);
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'SAAED Facilities Management System';
+  const ws = wb.addWorksheet('التقرير الشهري للمرافق', {
+    views: [{ rightToLeft: true }],
+  });
+
+  ws.columns = [
+    { width: 8 },
+    { width: 28 },
+    { width: 16 },
+    { width: 16 },
+    { width: 16 },
+    { width: 24 },
+  ];
+
+  const titleRow = ws.addRow([
+    `التقرير الشهري لقسم إدارة المرافق — ${report.reportNumber} (${getMonthNameAr(report.month)} ${report.year})`,
+  ]);
+  titleRow.font = { name: 'Cairo', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF012E5E' } };
+  ws.mergeCells(titleRow.number, 1, titleRow.number, 6);
+
+  ws.addRow([]);
+  const kpiHead = ws.addRow([
+    'المؤشر',
+    'إجمالي الطلبات',
+    'أعلى خدمة طلباً',
+    'إجمالي الخدمات النشطة',
+    'نسبة الإنجاز الشهرية',
+    'إجمالي تكاليف الصيانة (درهم)',
+  ]);
+  kpiHead.font = { bold: true };
+  ws.addRow([
+    'القيمة',
+    metrics.totalReceived,
+    metrics.topService ? metrics.topService.nameAr : '—',
+    metrics.activeServicesCount,
+    formatPct(metrics.overallCompletionPct, '0.0%'),
+    metrics.maintenance.grandTotalCostAed,
+  ]);
+
+  ws.addRow([]);
+  const svcHead = ws.addRow(['#', 'الخدمة', 'المستلمة', 'المنفذة', 'نسبة الإنجاز', 'المستوى']);
+  svcHead.font = { bold: true };
+  metrics.servicesWithMetrics.forEach((s, idx) => {
+    ws.addRow([
+      idx + 1,
+      s.nameAr,
+      s.receivedCount,
+      s.executedCount,
+      formatPct(s.completionPct, '0.0%'),
+      s.level.labelAr,
+    ]);
+  });
+
+  ws.addRow([]);
+  const taskHead = ws.addRow(['#', 'الموضوع', 'المهمة', 'الحالة', 'نسبة الإنجاز %', '']);
+  taskHead.font = { bold: true };
+  report.tasks.forEach((t, idx) => {
+    ws.addRow([idx + 1, t.topic, t.taskName, t.status, t.completionPct, '']);
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  await verifyMagicHeader(blob, 'xlsx');
+  const filename = `${report.reportNumber}_v${versionNumber || report.currentVersion}.xlsx`;
+  triggerBrowserDownload(blob, filename);
+  return { filename, sizeBytes: blob.size };
+}
+
+async function generateBrowserAnalyticsExcelFallback(): Promise<ExportResult> {
+  const ExcelJSImport = await import('exceljs');
+  const ExcelJS = ExcelJSImport.default || ExcelJSImport;
+  const { reports, sites, categories, thresholds } = staticFallbackApi.getAllReportsForAnalytics();
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('تحليل التقارير التنفيذي', {
+    views: [{ rightToLeft: true }],
+  });
+  ws.columns = [
+    { width: 18 },
+    { width: 16 },
+    { width: 16 },
+    { width: 16 },
+    { width: 16 },
+    { width: 20 },
+  ];
+  const header = ws.addRow([
+    'رقم التقرير',
+    'الفترة',
+    'الطلبات المستلمة',
+    'الطلبات المنفذة',
+    'نسبة الإنجاز',
+    'إجمالي التكاليف (درهم)',
+  ]);
+  header.font = { bold: true };
+
+  reports.forEach((r) => {
+    const m = computeReportMetrics(r, sites, categories, thresholds);
+    ws.addRow([
+      r.reportNumber,
+      `${getMonthNameAr(r.month)} ${r.year}`,
+      m.totalReceived,
+      m.totalExecuted,
+      formatPct(m.overallCompletionPct, '0.0%'),
+      m.maintenance.grandTotalCostAed,
+    ]);
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  await verifyMagicHeader(blob, 'xlsx');
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `SAAED_FM_Executive_Analytics_${stamp}.xlsx`;
+  triggerBrowserDownload(blob, filename);
+  return { filename, sizeBytes: blob.size };
+}
+
 export async function exportReportPdf(params: {
   reportId: string;
   versionNumber?: number | null;
   orientation?: 'landscape' | 'portrait';
 }): Promise<ExportResult> {
   const { reportId, versionNumber, orientation = 'landscape' } = params;
+
+  if (isStaticBackendUnavailable()) {
+    await prepareAndTriggerPrint({ orientation });
+    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+  }
+
   const qs = new URLSearchParams();
   if (versionNumber) qs.set('version', String(versionNumber));
   if (orientation) qs.set('orientation', orientation);
 
-  const url = `/api/reports/${encodeURIComponent(reportId)}/export/pdf?${qs.toString()}`;
+  const url = resolveApiUrl(
+    `/api/reports/${encodeURIComponent(reportId)}/export/pdf?${qs.toString()}`
+  );
   const token = getStoredToken();
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    markStaticBackendUnavailable();
+    await prepareAndTriggerPrint({ orientation });
+    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (res.status === 404 || contentType.includes('text/html')) {
+    markStaticBackendUnavailable();
+    await prepareAndTriggerPrint({ orientation });
+    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+  }
 
   if (!res.ok) {
     let errMsg = 'تعذر إنشاء ملف PDF الرسمي من الخادم';
@@ -91,14 +259,33 @@ export async function exportReportExcel(params: {
   versionNumber?: number | null;
 }): Promise<ExportResult> {
   const { reportId, versionNumber } = params;
-  const url = versionNumber
+
+  if (isStaticBackendUnavailable()) {
+    return generateBrowserReportExcelFallback(reportId, versionNumber);
+  }
+
+  const path = versionNumber
     ? `/api/reports/${encodeURIComponent(reportId)}/export/excel?version=${versionNumber}`
     : `/api/reports/${encodeURIComponent(reportId)}/export/excel`;
+  const url = resolveApiUrl(path);
   const token = getStoredToken();
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    markStaticBackendUnavailable();
+    return generateBrowserReportExcelFallback(reportId, versionNumber);
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (res.status === 404 || contentType.includes('text/html')) {
+    markStaticBackendUnavailable();
+    return generateBrowserReportExcelFallback(reportId, versionNumber);
+  }
 
   if (!res.ok) {
     let errMsg = 'تعذر إنشاء ملف Excel من الخادم';
@@ -126,16 +313,39 @@ export async function exportAnalyticsPdf(params: {
   orientation?: 'landscape' | 'portrait';
 }): Promise<ExportResult> {
   const { filters, orientation = 'landscape' } = params;
+
+  if (isStaticBackendUnavailable()) {
+    await prepareAndTriggerPrint({ orientation });
+    const stamp = new Date().toISOString().slice(0, 10);
+    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
+  }
+
   const token = getStoredToken();
-  const res = await fetch('/api/analytics/export/pdf', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ filters, orientation }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(resolveApiUrl('/api/analytics/export/pdf'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ filters, orientation }),
+    });
+  } catch {
+    markStaticBackendUnavailable();
+    await prepareAndTriggerPrint({ orientation });
+    const stamp = new Date().toISOString().slice(0, 10);
+    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (res.status === 404 || contentType.includes('text/html')) {
+    markStaticBackendUnavailable();
+    await prepareAndTriggerPrint({ orientation });
+    const stamp = new Date().toISOString().slice(0, 10);
+    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
+  }
 
   if (!res.ok) {
     throw new Error('تعذر إنشاء ملف PDF للتحليلات التنفيذية');
@@ -156,16 +366,33 @@ export async function exportAnalyticsExcel(params: {
   filters: Record<string, string>;
 }): Promise<ExportResult> {
   const { filters } = params;
+
+  if (isStaticBackendUnavailable()) {
+    return generateBrowserAnalyticsExcelFallback();
+  }
+
   const token = getStoredToken();
-  const res = await fetch('/api/analytics/export/excel', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ filters }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(resolveApiUrl('/api/analytics/export/excel'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ filters }),
+    });
+  } catch {
+    markStaticBackendUnavailable();
+    return generateBrowserAnalyticsExcelFallback();
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (res.status === 404 || contentType.includes('text/html')) {
+    markStaticBackendUnavailable();
+    return generateBrowserAnalyticsExcelFallback();
+  }
 
   if (!res.ok) {
     throw new Error('تعذر إنشاء ملف Excel للتحليلات التنفيذية');
