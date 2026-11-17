@@ -66,10 +66,127 @@ export interface OfficialReportLayoutProps {
 
 export const OFFICIAL_REPORT_TOTAL_PAGES = 5;
 
+/**
+ * Exact 1:1 A4 printable sheet dimensions inside @page { margin: 5mm; }:
+ * - A4 Portrait (210mm × 297mm) - 10mm = 200mm × 287mm = 755.9 × 1084.7 CSS px -> 748 × 1068 px
+ * - A4 Landscape (297mm × 210mm) - 10mm = 287mm × 200mm = 1084.7 × 755.9 CSS px -> 1076 × 740 px
+ */
 export const A4_SHEET_DIMENSIONS = {
-  landscape: { width: 1220, height: 854 },
-  portrait: { width: 920, height: 1310 },
+  landscape: { width: 1076, height: 740 },
+  portrait: { width: 748, height: 1068 },
 } as const;
+
+export interface ReportGeometryIssue {
+  pageNumber: number;
+  metric: string;
+  actual: number;
+  limit: number;
+}
+
+export interface ReportGeometryValidationResult {
+  valid: boolean;
+  totalPages: number;
+  issues: ReportGeometryIssue[];
+}
+
+export function validateReportPagesGeometry(
+  root: ParentNode,
+  orientation: 'landscape' | 'portrait'
+): ReportGeometryValidationResult {
+  const dims = A4_SHEET_DIMENSIONS[orientation];
+  const pages = Array.from(root.querySelectorAll<HTMLElement>('.official-report-page'));
+  const issues: ReportGeometryIssue[] = [];
+
+  pages.forEach((pageEl, idx) => {
+    const pageNumber = Number(pageEl.getAttribute('data-page-number')) || idx + 1;
+    // Skip hidden filtered-out screen pages when inspecting live modal UI
+    if (pageEl.offsetParent === null && window.getComputedStyle(pageEl).display === 'none') {
+      return;
+    }
+
+    const clientW = pageEl.clientWidth || dims.width;
+    const scrollW = pageEl.scrollWidth;
+    const scrollH = pageEl.scrollHeight;
+
+    if (scrollW > clientW + 2) {
+      issues.push({
+        pageNumber,
+        metric: 'page.scrollWidth > clientWidth',
+        actual: scrollW,
+        limit: clientW + 2,
+      });
+    }
+    if (scrollW > dims.width + 2) {
+      issues.push({
+        pageNumber,
+        metric: 'page.scrollWidth > a4Width',
+        actual: scrollW,
+        limit: dims.width + 2,
+      });
+    }
+    if (scrollH > dims.height + 2) {
+      issues.push({
+        pageNumber,
+        metric: 'page.scrollHeight > a4Height',
+        actual: scrollH,
+        limit: dims.height + 2,
+      });
+    }
+
+    const tables = Array.from(pageEl.querySelectorAll<HTMLTableElement>('table'));
+    tables.forEach((tbl, tIdx) => {
+      if (tbl.scrollWidth > tbl.clientWidth + 2) {
+        issues.push({
+          pageNumber,
+          metric: `table[${tIdx}].scrollWidth > clientWidth`,
+          actual: tbl.scrollWidth,
+          limit: tbl.clientWidth + 2,
+        });
+      }
+    });
+
+    const pageRect = pageEl.getBoundingClientRect();
+    const scale = pageRect.width > 0 && pageEl.offsetWidth > 0 ? pageRect.width / pageEl.offsetWidth : 1;
+    const header = pageEl.querySelector<HTMLElement>('.official-page-header');
+    const footer = pageEl.querySelector<HTMLElement>('.official-page-footer');
+
+    if (header && pageRect.width > 0) {
+      const hRect = header.getBoundingClientRect();
+      const unscaledTopOffset = (hRect.top - pageRect.top) / scale;
+      const unscaledLeftOffset = (hRect.left - pageRect.left) / scale;
+      const unscaledRightOverflow = (hRect.right - pageRect.right) / scale;
+      if (unscaledTopOffset < -2 || unscaledLeftOffset < -2 || unscaledRightOverflow > 2) {
+        issues.push({
+          pageNumber,
+          metric: 'header.outOfPageBounds',
+          actual: Math.round(Math.max(-unscaledTopOffset, -unscaledLeftOffset, unscaledRightOverflow)),
+          limit: 2,
+        });
+      }
+    }
+
+    if (footer && pageRect.width > 0) {
+      const fRect = footer.getBoundingClientRect();
+      const unscaledBottomOverflow = (fRect.bottom - pageRect.bottom) / scale;
+      const unscaledLeftOffset = (fRect.left - pageRect.left) / scale;
+      const unscaledRightOverflow = (fRect.right - pageRect.right) / scale;
+      if (unscaledBottomOverflow > 2 || unscaledLeftOffset < -2 || unscaledRightOverflow > 2) {
+        issues.push({
+          pageNumber,
+          metric: 'footer.outOfPageBounds',
+          actual: Math.round(Math.max(unscaledBottomOverflow, -unscaledLeftOffset, unscaledRightOverflow)),
+          limit: 2,
+        });
+      }
+    }
+  });
+
+  return {
+    valid: issues.length === 0,
+    totalPages: pages.length,
+    issues,
+  };
+}
 
 type BlockSpec =
   | { kind: 'sec1_exec' }
@@ -173,11 +290,11 @@ function buildInitialPages(params: {
         { kind: 'sec12_signatures' },
       ]);
     } else {
-      const taskChunks = chunkRange(tasksCount, 9);
+      const taskChunks = chunkRange(tasksCount, 8);
       taskChunks.forEach(([start, end]) => {
         pages.push([{ kind: 'sec10_tasks', start, end }]);
       });
-      const chChunks = chunkRange(challengesCount, 6);
+      const chChunks = chunkRange(challengesCount, 5);
       chChunks.forEach(([start, end], idx) => {
         const blocks: BlockSpec[] = [{ kind: 'sec11_challenges', start, end }];
         if (idx === chChunks.length - 1 && end - start <= 3) {
@@ -193,7 +310,7 @@ function buildInitialPages(params: {
     return pages;
   }
 
-  // LANDSCAPE (1220px × 854px per exact A4 Landscape sheet)
+  // LANDSCAPE (1076px × 740px per exact native A4 Landscape sheet)
   const pages: PagePlan[] = [];
 
   // Sheet 1: Executive Summary + Operations Summary Strip (7 cards)
@@ -203,7 +320,7 @@ function buildInitialPages(params: {
   pages.push([{ kind: 'sec2_perf' }]);
 
   // Sheet 3: Section 3 Services Summary & Completion Indicators
-  const svcChunks = chunkRange(servicesCount, 13);
+  const svcChunks = chunkRange(servicesCount, 12);
   svcChunks.forEach(([start, end]) => {
     pages.push([{ kind: 'sec3_summary', start, end }]);
   });
@@ -241,7 +358,7 @@ function buildInitialPages(params: {
   }
 
   // Sheet 7+: Section 10 Operational Tasks
-  const taskChunks = chunkRange(tasksCount, 7);
+  const taskChunks = chunkRange(tasksCount, 6);
   taskChunks.forEach(([start, end]) => {
     pages.push([{ kind: 'sec10_tasks', start, end }]);
   });
@@ -464,11 +581,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
   const totalPages = activePages.length;
   const paginationReady = pagesState.signature === dataSignature && pagesState.ready;
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Array<HTMLElement | null>>([]);
+  const [geometryValid, setGeometryValid] = useState(true);
 
   useLayoutEffect(() => {
     if (pagesState.signature !== dataSignature) return;
-    if (pagesState.ready) return;
+    if (pagesState.ready) {
+      if (containerRef.current) {
+        const res = validateReportPagesGeometry(containerRef.current, orientation);
+        setGeometryValid(res.valid);
+      }
+      return;
+    }
 
     const targetHeight = A4_SHEET_DIMENSIONS[orientation].height;
     const overflowing: number[] = [];
@@ -481,7 +606,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       }
     }
 
-    if (overflowing.length > 0 && pagesState.pass < 12) {
+    if (overflowing.length > 0 && pagesState.pass < 14) {
       const refined = refineOverflowingPages(pagesState.pages, overflowing);
       if (refined) {
         setPagesState({
@@ -509,12 +634,17 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       ? 'official-report-page--landscape'
       : 'official-report-page--portrait';
   const isCompactSheet = orientation === 'landscape';
+  const isPortrait = orientation === 'portrait';
 
   const renderPageHeader = (pageNumber: number) => (
     <div className="official-page-header shrink-0">
       <SaaedExecutiveHeader />
-      <div className="bg-[#F4F7FB] border-b border-[#C5D8EE] px-3.5 py-1.5 flex items-center justify-between gap-2 text-[10.5px] text-[#012E5E]">
-        <div className="flex items-center gap-2 min-w-0">
+      <div
+        className={`bg-[#F4F7FB] border-b border-[#C5D8EE] flex flex-wrap items-center justify-between text-[#012E5E] ${
+          isPortrait ? 'px-2.5 py-1 gap-1.5 text-[9px]' : 'px-3 py-1 gap-2 text-[10px]'
+        }`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
           <span className="font-extrabold text-[#012E5E] whitespace-nowrap">{report.company}</span>
           <span className="text-slate-300">|</span>
           <span className="font-bold text-[#1769AA] whitespace-nowrap">
@@ -533,7 +663,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             التصنيف: {report.classification}
           </span>
         </div>
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className={`flex items-center shrink-0 ${isPortrait ? 'gap-1.5' : 'gap-2'}`}>
           <span className="whitespace-nowrap">
             رقم التقرير:{' '}
             <span className="font-mono font-extrabold text-[#012E5E] tabular-nums" dir="ltr">
@@ -541,7 +671,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             </span>
           </span>
           <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-extrabold text-[10px] border whitespace-nowrap ${
+            className={`inline-flex items-center gap-1 rounded-full font-extrabold border whitespace-nowrap ${
+              isPortrait ? 'px-1.5 py-0.5 text-[8.5px]' : 'px-2 py-0.5 text-[9.5px]'
+            } ${
               isApprovedOrArchived
                 ? 'bg-emerald-50 text-[#069B74] border-emerald-300'
                 : 'bg-amber-50 text-[#9A6700] border-amber-300'
@@ -562,7 +694,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               v{verNumber}
             </span>
           </span>
-          <span className="bg-[#012E5E] text-[#DFC076] px-2 py-0.5 rounded font-bold text-[10px] whitespace-nowrap">
+          <span className={`bg-[#012E5E] text-[#DFC076] rounded font-bold whitespace-nowrap ${isPortrait ? 'px-1.5 py-0.5 text-[8.5px]' : 'px-2 py-0.5 text-[9.5px]'}`}>
             الصفحة <span dir="ltr" className="tabular-nums">{formatNumber(pageNumber)}</span> من{' '}
             <span dir="ltr" className="tabular-nums">{formatNumber(totalPages)}</span>
           </span>
@@ -570,8 +702,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       </div>
 
       {!isApprovedOrArchived && (
-        <div className="bg-amber-50/90 border-b border-amber-300 px-3.5 py-1 flex items-center justify-center gap-2 text-[10.5px] font-extrabold text-[#92620A]">
-          <AlertTriangle className="w-3.5 h-3.5 text-[#C99E4A] shrink-0" />
+        <div className={`bg-amber-50/90 border-b border-amber-300 px-3 py-0.5 flex items-center justify-center gap-1.5 font-extrabold text-[#92620A] ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'}`}>
+          <AlertTriangle className="w-3 h-3 text-[#C99E4A] shrink-0" />
           <span>
             تنبيه رسمي: هذه النسخة ({STATUS_LABELS_AR[report.status]}) قيد الإعداد/المراجعة ولم تُعتمد نهائياً بعد
           </span>
@@ -581,10 +713,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
   );
 
   const renderPageFooter = (pageNumber: number) => (
-    <div className="official-page-footer mt-auto pt-1.5 shrink-0">
+    <div className="official-page-footer mt-auto pt-1 shrink-0">
       <div className="relative">
         <CorporateFooter />
-        <div className="bg-[#021F40] border-t border-[#C99E4A]/50 px-4 py-0.5 flex items-center justify-between text-[10px] text-slate-200">
+        <div className="bg-[#021F40] border-t border-[#C99E4A]/50 px-3.5 py-0.5 flex items-center justify-between text-[9.5px] text-slate-200">
           <span>
             التقرير الشهري لقسم إدارة المرافق — رقم{' '}
             <span dir="ltr" className="font-mono font-bold text-[#DFC076] tabular-nums">
@@ -601,12 +733,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
   );
 
   const renderRibbonHeader = (titleAr: string, titleEn: string) => (
-    <div className="bg-gradient-to-l from-[#012E5E] via-[#083A72] to-[#0C4176] border-b-2 border-[#C99E4A] px-3.5 py-1.5 flex items-center justify-between text-white rounded-t-xl">
-      <div className="flex items-center gap-2">
-        <span className="w-1.5 h-3.5 rounded-full bg-[#C99E4A]" />
-        <h2 className="text-[13px] font-extrabold tracking-tight">{titleAr}</h2>
+    <div className="bg-gradient-to-l from-[#012E5E] via-[#083A72] to-[#0C4176] border-b-2 border-[#C99E4A] px-3 py-1 flex items-center justify-between text-white rounded-t-xl">
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-3 rounded-full bg-[#C99E4A]" />
+        <h2 className="text-[12px] font-extrabold tracking-tight">{titleAr}</h2>
       </div>
-      <span className="text-[10px] font-semibold text-[#DFC076] uppercase tracking-wider" dir="ltr">
+      <span className="text-[9.5px] font-semibold text-[#DFC076] uppercase tracking-wider" dir="ltr">
         {titleEn}
       </span>
     </div>
@@ -619,12 +751,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         return (
           <section key={key} className="rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden">
             {renderRibbonHeader('1. الملخص التنفيذي', 'Executive Summary')}
-            <div className="p-2.5 bg-gradient-to-b from-[#F4F8FC] to-white">
-              <div className="grid grid-cols-12 gap-2.5 items-stretch">
-                <div className="col-span-9 grid grid-cols-4 gap-2.5 items-stretch">
+            <div className={`${isCompactSheet ? 'p-1.5' : 'p-2'} bg-gradient-to-b from-[#F4F8FC] to-white`}>
+              <div className="grid grid-cols-12 gap-2 items-stretch">
+                <div className="col-span-9 grid grid-cols-4 gap-2 items-stretch">
                   {/* Card 1: Total Requests */}
                   <div className="rounded-xl border border-[#B8CEE8] bg-gradient-to-b from-[#F4F8FD] via-[#EBF2FC] to-[#DFEAFA] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className="relative h-[62px] w-full overflow-hidden bg-[#D8E8FA] shrink-0">
+                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#D8E8FA] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.totalRequests.src}
                         alt={EXECUTIVE_KPI_IMAGES.totalRequests.altAr}
@@ -640,19 +772,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#EBF2FC] via-[#EBF2FC]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-2 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-4 relative z-10 w-7 h-7 rounded-lg bg-white/95 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-1 shadow-xs shrink-0">
-                        <ClipboardList className="w-3.5 h-3.5" />
+                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                        <ClipboardList className="w-3 h-3" />
                       </div>
                       <span
-                        className="text-lg font-black text-[#012E5E] tabular-nums leading-none"
+                        className="text-base font-black text-[#012E5E] tabular-nums leading-none"
                         dir="ltr"
                       >
                         {formatNumber(metrics.totalReceived)}
                       </span>
-                      <div className="mt-1">
-                        <p className="text-[10.5px] font-extrabold text-[#012E5E]">إجمالي الطلبات</p>
-                        <p className="text-[9px] font-medium text-slate-600" dir="ltr">
+                      <div className="mt-0.5">
+                        <p className="text-[10px] font-extrabold text-[#012E5E]">إجمالي الطلبات</p>
+                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
                           Total Requests
                         </p>
                       </div>
@@ -661,7 +793,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 2: Top Service */}
                   <div className="rounded-xl border border-[#E2C88B] bg-gradient-to-b from-[#FDF9EE] via-[#F9F0DA] to-[#F3E5C2] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className="relative h-[62px] w-full overflow-hidden bg-[#F3E5C2] shrink-0">
+                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#F3E5C2] shrink-0`}>
                       <img
                         src={topServiceImg.src}
                         alt={topServiceImg.altAr}
@@ -677,16 +809,16 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#F9F0DA] via-[#F9F0DA]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-2 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-4 relative z-10 w-7 h-7 rounded-lg bg-white/95 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-1 shadow-xs shrink-0">
-                        <Award className="w-3.5 h-3.5" />
+                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                        <Award className="w-3 h-3" />
                       </div>
-                      <p className="text-[11.5px] font-black text-[#012E5E] leading-snug line-clamp-2 min-h-[20px] flex items-center justify-center">
+                      <p className="text-[10.5px] font-black text-[#012E5E] leading-tight line-clamp-2 min-h-[18px] flex items-center justify-center">
                         {metrics.topService ? metrics.topService.nameAr : '0'}
                       </p>
-                      <div className="mt-1">
-                        <p className="text-[10.5px] font-extrabold text-[#012E5E]">أعلى خدمة طلباً</p>
-                        <p className="text-[9px] font-medium text-slate-600">
+                      <div className="mt-0.5">
+                        <p className="text-[10px] font-extrabold text-[#012E5E]">أعلى خدمة طلباً</p>
+                        <p className="text-[8.5px] font-medium text-slate-600">
                           {metrics.topService
                             ? `${formatNumber(metrics.topService.receivedCount)} طلب · Top Service`
                             : 'Top Service'}
@@ -697,7 +829,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 3: Total Services */}
                   <div className="rounded-xl border border-[#A5C8EB] bg-gradient-to-b from-[#F0F7FE] via-[#E4F0FC] to-[#D5E7FA] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className="relative h-[62px] w-full overflow-hidden bg-[#D5E7FA] shrink-0">
+                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#D5E7FA] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.totalServices.src}
                         alt={EXECUTIVE_KPI_IMAGES.totalServices.altAr}
@@ -713,19 +845,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#E4F0FC] via-[#E4F0FC]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-2 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-4 relative z-10 w-7 h-7 rounded-lg bg-white/95 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-1 shadow-xs shrink-0">
-                        <Layers className="w-3.5 h-3.5" />
+                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                        <Layers className="w-3 h-3" />
                       </div>
                       <span
-                        className="text-lg font-black text-[#012E5E] tabular-nums leading-none"
+                        className="text-base font-black text-[#012E5E] tabular-nums leading-none"
                         dir="ltr"
                       >
                         {formatNumber(metrics.activeServicesCount)}
                       </span>
-                      <div className="mt-1">
-                        <p className="text-[10.5px] font-extrabold text-[#012E5E]">إجمالي الخدمات</p>
-                        <p className="text-[9px] font-medium text-slate-600" dir="ltr">
+                      <div className="mt-0.5">
+                        <p className="text-[10px] font-extrabold text-[#012E5E]">إجمالي الخدمات</p>
+                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
                           Total Services
                         </p>
                       </div>
@@ -734,7 +866,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 4: Monthly Completion Rate */}
                   <div className="rounded-xl border border-[#9CD9C5] bg-gradient-to-b from-[#EFFBF6] via-[#E1F6ED] to-[#CEEFE1] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className="relative h-[62px] w-full overflow-hidden bg-[#CEEFE1] shrink-0">
+                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#CEEFE1] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.monthlyCompletion.src}
                         alt={EXECUTIVE_KPI_IMAGES.monthlyCompletion.altAr}
@@ -750,19 +882,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#E1F6ED] via-[#E1F6ED]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-2 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-4 relative z-10 w-7 h-7 rounded-lg bg-white/95 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-1 shadow-xs shrink-0">
-                        <Target className="w-3.5 h-3.5" />
+                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                        <Target className="w-3 h-3" />
                       </div>
                       <span
-                        className="text-lg font-black text-[#069B74] tabular-nums leading-none"
+                        className="text-base font-black text-[#069B74] tabular-nums leading-none"
                         dir="ltr"
                       >
                         {formatPct(metrics.overallCompletionPct, '0.0%')}
                       </span>
-                      <div className="mt-1">
-                        <p className="text-[10.5px] font-extrabold text-[#012E5E]">نسبة الإنجاز الشهرية</p>
-                        <p className="text-[9px] font-medium text-slate-600" dir="ltr">
+                      <div className="mt-0.5">
+                        <p className="text-[10px] font-extrabold text-[#012E5E]">نسبة الإنجاز الشهرية</p>
+                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
                           Monthly Completion Rate
                         </p>
                       </div>
@@ -771,16 +903,16 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 </div>
 
                 {/* Card 5: Engineer Tablet Inspector Photo */}
-                <div className="col-span-3 rounded-xl overflow-hidden border border-[#C99E4A]/70 relative min-h-[130px] bg-[#012E5E] shadow-xs">
+                <div className="col-span-3 rounded-xl overflow-hidden border border-[#C99E4A]/70 relative min-h-[116px] bg-[#012E5E] shadow-xs">
                   <img
                     src={engineerImg}
                     alt="فريق التفتيش الهندسي وإدارة المرافق"
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-[#012E5E]/90 via-[#012E5E]/25 to-transparent flex flex-col justify-end p-2.5 text-white">
-                    <span className="text-[9.5px] font-bold text-[#DFC076]">إدارة المرافق الذكية</span>
-                    <span className="text-[10.5px] font-extrabold leading-tight">
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#012E5E]/90 via-[#012E5E]/25 to-transparent flex flex-col justify-end p-2 text-white">
+                    <span className="text-[9px] font-bold text-[#DFC076]">إدارة المرافق الذكية</span>
+                    <span className="text-[10px] font-extrabold leading-tight">
                       متابعة ميدانية ورقابة جودة مستمرة
                     </span>
                   </div>
@@ -798,30 +930,30 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               'ملخص العمليات والاعتماد (7 بطاقات تنفيذية)',
               'Operations & Approval Summary Strip'
             )}
-            <div className="p-2.5 bg-[#F7FAFC] space-y-2">
+            <div className="p-1.5 bg-[#F7FAFC] space-y-1.5">
               {/* Row 1: 4 Photo Cards */}
-              <div className="grid grid-cols-4 gap-2">
+              <div className={`grid grid-cols-4 ${isPortrait ? 'gap-1.5' : 'gap-2'}`}>
                 {/* Card 1 */}
                 <div className="rounded-xl border border-[#C5D8EE] bg-white overflow-hidden shadow-2xs flex flex-col">
-                  <div className="bg-[#012E5E] text-white px-2.5 py-1 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                    <span>تفاصيل الصيانة بالمقرات</span>
-                    <Building2 className="w-3.5 h-3.5 text-[#DFC076] shrink-0" />
+                  <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} font-extrabold flex items-center justify-between border-b border-[#C99E4A]`}>
+                    <span className="truncate">تفاصيل الصيانة بالمقرات</span>
+                    <Building2 className="w-3 h-3 text-[#DFC076] shrink-0" />
                   </div>
-                  <div className="p-2 flex items-center gap-2 flex-1">
+                  <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} flex items-center flex-1`}>
                     <img
                       src={engineeringImg}
                       alt="تفاصيل الصيانة بالمقرات"
-                      className="w-13 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                      className={`${isPortrait ? 'w-9 h-9' : 'w-11 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                     />
                     <div className="flex-1 grid grid-cols-2 gap-1 text-center">
-                      <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
-                        <p className="text-[9px] font-bold text-slate-600">عدد المقرات</p>
+                      <div className="bg-[#F4F8FC] rounded p-0.5 border border-slate-200">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-slate-600`}>عدد المقرات</p>
                         <p className="text-xs font-black text-[#012E5E] tabular-nums" dir="ltr">
                           {formatNumber(sites.length)}
                         </p>
                       </div>
-                      <div className="bg-[#EAF4FC] rounded p-1 border border-[#B8CDE4]">
-                        <p className="text-[9px] font-bold text-[#0C4176]">إجمالي الأعطال</p>
+                      <div className="bg-[#EAF4FC] rounded p-0.5 border border-[#B8CDE4]">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-[#0C4176]`}>إجمالي الأعطال</p>
                         <p className="text-xs font-black text-[#1769AA] tabular-nums" dir="ltr">
                           {formatNumber(metrics.maintenance.grandTotalFaults)}
                         </p>
@@ -832,25 +964,25 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                 {/* Card 2 */}
                 <div className="rounded-xl border border-[#C5D8EE] bg-white overflow-hidden shadow-2xs flex flex-col">
-                  <div className="bg-[#012E5E] text-white px-2.5 py-1 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                    <span>خدمات الصيانة</span>
-                    <Wrench className="w-3.5 h-3.5 text-[#DFC076] shrink-0" />
+                  <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} font-extrabold flex items-center justify-between border-b border-[#C99E4A]`}>
+                    <span className="truncate">خدمات الصيانة</span>
+                    <Wrench className="w-3 h-3 text-[#DFC076] shrink-0" />
                   </div>
-                  <div className="p-2 flex items-center gap-2 flex-1">
+                  <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} flex items-center flex-1`}>
                     <img
                       src={technicianImg}
                       alt="خدمات الصيانة"
-                      className="w-13 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                      className={`${isPortrait ? 'w-9 h-9' : 'w-11 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                     />
                     <div className="flex-1 grid grid-cols-2 gap-1 text-center">
-                      <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
-                        <p className="text-[9px] font-bold text-slate-600">قسم المرافق</p>
+                      <div className="bg-[#F4F8FC] rounded p-0.5 border border-slate-200">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-slate-600`}>قسم المرافق</p>
                         <p className="text-xs font-black text-[#012E5E] tabular-nums" dir="ltr">
                           {formatNumber(report.maintenanceServices.fromFacilitiesDept)}
                         </p>
                       </div>
-                      <div className="bg-[#FDF8EC] rounded p-1 border border-[#E4CFA0]">
-                        <p className="text-[9px] font-bold text-[#785817]">إدارات أخرى</p>
+                      <div className="bg-[#FDF8EC] rounded p-0.5 border border-[#E4CFA0]">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-[#785817]`}>إدارات أخرى</p>
                         <p className="text-xs font-black text-[#9A6700] tabular-nums" dir="ltr">
                           {formatNumber(report.maintenanceServices.fromOtherDepts)}
                         </p>
@@ -861,22 +993,22 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                 {/* Card 3 */}
                 <div className="rounded-xl border border-[#C5D8EE] bg-white overflow-hidden shadow-2xs flex flex-col">
-                  <div className="bg-[#012E5E] text-white px-2.5 py-1 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                    <span>الدعم اللوجستي</span>
-                    <Truck className="w-3.5 h-3.5 text-[#DFC076] shrink-0" />
+                  <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} font-extrabold flex items-center justify-between border-b border-[#C99E4A]`}>
+                    <span className="truncate">الدعم اللوجستي</span>
+                    <Truck className="w-3 h-3 text-[#DFC076] shrink-0" />
                   </div>
-                  <div className="p-2 flex items-center gap-2 flex-1">
+                  <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} flex items-center flex-1`}>
                     <img
                       src={safetyImg}
                       alt="الدعم اللوجستي"
-                      className="w-13 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                      className={`${isPortrait ? 'w-9 h-9' : 'w-11 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                     />
-                    <div className="flex-1 bg-[#EAF4FC] rounded-lg p-1 border border-[#B8CDE4] text-center">
-                      <p className="text-[9px] font-bold text-[#0C4176]">إجمالي الطلبات اللوجستية</p>
-                      <p className="text-sm font-black text-[#012E5E] tabular-nums" dir="ltr">
+                    <div className="flex-1 bg-[#EAF4FC] rounded-lg p-0.5 border border-[#B8CDE4] text-center">
+                      <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-[#0C4176]`}>إجمالي الطلبات اللوجستية</p>
+                      <p className="text-xs font-black text-[#012E5E] tabular-nums" dir="ltr">
                         {formatNumber(metrics.logisticsTotal)}
                       </p>
-                      <p className="text-[8.5px] text-slate-600">
+                      <p className="text-[8px] text-slate-600">
                         عبر {formatNumber(report.logistics.length)} قنوات تشغيلية
                       </p>
                     </div>
@@ -885,25 +1017,25 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                 {/* Card 4 */}
                 <div className="rounded-xl border border-[#C5D8EE] bg-white overflow-hidden shadow-2xs flex flex-col">
-                  <div className="bg-[#012E5E] text-white px-2.5 py-1 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                    <span>خدمات الأمن والاستقبال</span>
-                    <UserCheck className="w-3.5 h-3.5 text-[#DFC076] shrink-0" />
+                  <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} font-extrabold flex items-center justify-between border-b border-[#C99E4A]`}>
+                    <span className="truncate">خدمات الأمن والاستقبال</span>
+                    <UserCheck className="w-3 h-3 text-[#DFC076] shrink-0" />
                   </div>
-                  <div className="p-2 flex items-center gap-2 flex-1">
+                  <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} flex items-center flex-1`}>
                     <img
                       src={receptionImg}
                       alt="خدمات الأمن والاستقبال"
-                      className="w-13 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                      className={`${isPortrait ? 'w-9 h-9' : 'w-11 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                     />
                     <div className="flex-1 grid grid-cols-2 gap-1 text-center">
-                      <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
-                        <p className="text-[9px] font-bold text-slate-600">المستلمة</p>
+                      <div className="bg-[#F4F8FC] rounded p-0.5 border border-slate-200">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-slate-600`}>المستلمة</p>
                         <p className="text-xs font-black text-[#012E5E] tabular-nums" dir="ltr">
                           {formatNumber(metrics.securityTotals.totalReceived)}
                         </p>
                       </div>
-                      <div className="bg-emerald-50 rounded p-1 border border-emerald-200">
-                        <p className="text-[9px] font-bold text-[#069B74]">المنفذة</p>
+                      <div className="bg-emerald-50 rounded p-0.5 border border-emerald-200">
+                        <p className={`${isPortrait ? 'text-[8px]' : 'text-[8.5px]'} font-bold text-[#069B74]`}>المنفذة</p>
                         <p className="text-xs font-black text-[#069B74] tabular-nums" dir="ltr">
                           {formatNumber(metrics.securityTotals.totalExecuted)}
                         </p>
@@ -914,7 +1046,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               </div>
 
               {/* Row 2: 3 Summary Cards */}
-              <div className="grid grid-cols-12 gap-2">
+              <div className={`grid grid-cols-12 ${isPortrait ? 'gap-1.5' : 'gap-2'}`}>
                 {/* Card 5 */}
                 <div className="col-span-4 rounded-xl border border-[#C5D8EE] bg-white overflow-hidden shadow-2xs">
                   <div className="bg-[#0C4176] text-white px-2.5 py-1 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
@@ -982,16 +1114,16 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   <div className="p-1.5 grid grid-cols-3 gap-1.5 text-[9.5px]">
                     <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
                       <p className="font-bold text-[#9A6700]">معد التقرير</p>
-                      <p className="font-extrabold text-[#012E5E] truncate">
+                      <p className="font-extrabold text-[#012E5E] leading-tight">
                         {report.preparerName || '—'}
                       </p>
-                      <p className="text-[8.5px] text-[#069B74] font-bold truncate">
+                      <p className="text-[8.5px] text-[#069B74] font-bold">
                         {report.preparerSignatureImage ? '✓ موقّع إلكترونياً' : 'قيد التوقيع'}
                       </p>
                     </div>
                     <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
                       <p className="font-bold text-[#1769AA]">حالة المراجعة</p>
-                      <p className="font-extrabold text-[#012E5E] truncate">
+                      <p className="font-extrabold text-[#012E5E] leading-tight">
                         {STATUS_LABELS_AR[report.status]}
                       </p>
                       <p className="text-[8.5px] text-slate-500 font-mono" dir="ltr">
@@ -1000,11 +1132,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                     </div>
                     <div className="bg-[#F4F8FC] rounded p-1 border border-slate-200">
                       <p className="font-bold text-[#0C4176]">معتمد التقرير</p>
-                      <p className="font-extrabold text-[#012E5E] truncate">
+                      <p className="font-extrabold text-[#012E5E] leading-tight">
                         {report.approverName || '—'}
                       </p>
                       <p
-                        className={`text-[8.5px] font-bold truncate ${
+                        className={`text-[8.5px] font-bold ${
                           report.approverSignatureImage ? 'text-[#069B74]' : 'text-amber-700'
                         }`}
                       >
@@ -1025,42 +1157,42 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               '2. نظرة عامة على الأداء — الطلبات حسب الخدمة وتوزيع الأداء',
               'Performance Overview — Requests by Service & Distribution'
             )}
-            <div className="p-2.5 grid grid-cols-12 gap-2.5 items-stretch">
+            <div className="p-2 grid grid-cols-12 gap-2 items-stretch">
               {/* Right Column (3 cols): Technical Operations Photo Card */}
               <div className="col-span-3 rounded-xl border border-[#C5D8EE] bg-[#F7FAFC] overflow-hidden flex flex-col justify-between">
-                <div className="bg-[#0C4176] text-white px-2.5 py-1.5 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
+                <div className="bg-[#0C4176] text-white px-2 py-1 text-[10px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
                   <span>المهام والتحديات الفنية</span>
-                  <Wrench className="w-3.5 h-3.5 text-[#DFC076]" />
+                  <Wrench className="w-3 h-3 text-[#DFC076]" />
                 </div>
-                <div className="p-2 flex-1 flex flex-col justify-between space-y-2">
-                  <div className="rounded-lg overflow-hidden border border-slate-200 relative h-28 bg-[#012E5E]">
+                <div className="p-1.5 flex-1 flex flex-col justify-between space-y-1.5">
+                  <div className={`rounded-lg overflow-hidden border border-slate-200 relative ${isPortrait ? 'h-24' : 'h-26'} bg-[#012E5E]`}>
                     <img
                       src={technicianImg}
                       alt="المهام والتحديات الفنية"
                       className="w-full h-full object-cover"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[#012E5E]/85 via-transparent to-transparent flex items-end p-2">
-                      <span className="text-[9.5px] font-bold text-white leading-tight">
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#012E5E]/85 via-transparent to-transparent flex items-end p-1.5">
+                      <span className="text-[9px] font-bold text-white leading-tight">
                         كفاءة تشغيلية واستجابة فورية للبلاغات الفنية
                       </span>
                     </div>
                   </div>
-                  <div className="space-y-1 text-[10px]">
-                    <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-slate-200">
+                  <div className="space-y-1 text-[9.5px]">
+                    <div className="flex items-center justify-between bg-white px-1.5 py-1 rounded-lg border border-slate-200">
                       <span className="font-bold text-slate-600">إجمالي الطلبات المستلمة</span>
-                      <span className="font-black text-[#012E5E] tabular-nums" dir="ltr">
+                      <span className="font-black text-[#012E5E] tabular-nums report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalReceived)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between bg-emerald-50/70 px-2 py-1 rounded-lg border border-emerald-200">
+                    <div className="flex items-center justify-between bg-emerald-50/70 px-1.5 py-1 rounded-lg border border-emerald-200">
                       <span className="font-bold text-[#069B74]">إجمالي الطلبات المنفذة</span>
-                      <span className="font-black text-[#069B74] tabular-nums" dir="ltr">
+                      <span className="font-black text-[#069B74] tabular-nums report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalExecuted)}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between bg-[#FDF8EC] px-2 py-1 rounded-lg border border-[#E4CFA0]">
+                    <div className="flex items-center justify-between bg-[#FDF8EC] px-1.5 py-1 rounded-lg border border-[#E4CFA0]">
                       <span className="font-bold text-[#785817]">معدل الإنجاز العام</span>
-                      <span className="font-black text-[#9A6700] tabular-nums" dir="ltr">
+                      <span className="font-black text-[#9A6700] tabular-nums report-num-cell" dir="ltr">
                         {formatPct(metrics.overallCompletionPct)}
                       </span>
                     </div>
@@ -1070,13 +1202,13 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
               {/* Middle Column (5 cols): Requests by Service Table */}
               <div className="col-span-5 rounded-xl border border-[#C5D8EE] bg-white overflow-hidden flex flex-col">
-                <div className="bg-[#012E5E] text-white px-2.5 py-1.5 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
+                <div className="bg-[#012E5E] text-white px-2 py-1 text-[10px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
                   <span>الطلبات حسب الخدمة · Requests by Service</span>
-                  <span className="text-[9.5px] text-[#DFC076]" dir="ltr">
+                  <span className="text-[9px] text-[#DFC076]" dir="ltr">
                     {formatNumber(sortedRequestsByService.length)} Services
                   </span>
                 </div>
-                <table className="requests-by-service-table w-full text-[10.5px] border-collapse">
+                <table className="requests-by-service-table w-full text-[10px] border-collapse table-fixed">
                   <colgroup>
                     <col style={{ width: '58%' }} />
                     <col style={{ width: '22%' }} />
@@ -1084,9 +1216,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   </colgroup>
                   <thead className="bg-[#DCE9F6] text-[#012E5E] border-b border-[#B8CDE4]">
                     <tr>
-                      <th className="py-1 px-2 text-start font-extrabold text-[10.5px]">الخدمة</th>
-                      <th className="py-1 px-2 text-center font-extrabold text-[10.5px]">العدد</th>
-                      <th className="py-1 px-2 text-center font-extrabold text-[10.5px]">النسبة</th>
+                      <th className="py-1 px-1.5 text-start font-extrabold text-[10px]">الخدمة</th>
+                      <th className="py-1 px-1 text-center font-extrabold text-[10px]">العدد</th>
+                      <th className="py-1 px-1 text-center font-extrabold text-[10px]">النسبة</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -1097,25 +1229,25 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           key={s.serviceId}
                           className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                         >
-                          <td className="py-0.5 px-2 font-bold text-[#012E5E] align-middle">
-                            <div className="flex items-center gap-1.5 min-w-0">
+                          <td className="py-0.5 px-1.5 font-bold text-[#012E5E] align-middle">
+                            <div className="flex items-center gap-1 min-w-0">
                               <span
-                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                className="w-2 h-2 rounded-full shrink-0"
                                 style={{ backgroundColor: vis.color }}
                               />
                               <span className="truncate">{s.nameAr}</span>
                             </div>
                           </td>
-                          <td className="py-0.5 px-2 text-center align-middle">
+                          <td className="py-0.5 px-1 text-center align-middle">
                             <span
                               dir="ltr"
-                              className="inline-flex items-center justify-center min-w-[54px] px-1.5 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums text-[10.5px]"
+                              className="inline-flex items-center justify-center min-w-[42px] px-1.5 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums text-[10px] report-num-cell"
                             >
                               {formatNumber(s.receivedCount)}
                             </span>
                           </td>
                           <td
-                            className="py-0.5 px-2 text-center align-middle tabular-nums font-extrabold text-[#1769AA]"
+                            className="py-0.5 px-1 text-center align-middle tabular-nums font-extrabold text-[#1769AA] report-num-cell"
                             dir="ltr"
                           >
                             {formatPct(s.shareOfTotalPct, '0.0%')}
@@ -1126,14 +1258,14 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   </tbody>
                   <tfoot className="bg-[#012E5E] text-white font-extrabold">
                     <tr>
-                      <td className="py-1 px-2 text-[10.5px]">الإجمالي · Total</td>
+                      <td className="py-1 px-1.5 text-[10px]">الإجمالي · Total</td>
                       <td
-                        className="py-1 px-2 text-center tabular-nums text-[#DFC076] text-[11px]"
+                        className="py-1 px-1 text-center tabular-nums text-[#DFC076] text-[10.5px] report-num-cell"
                         dir="ltr"
                       >
                         {formatNumber(metrics.totalReceived)}
                       </td>
-                      <td className="py-1 px-2 text-center tabular-nums text-[10.5px]" dir="ltr">
+                      <td className="py-1 px-1 text-center tabular-nums text-[10px] report-num-cell" dir="ltr">
                         {metrics.totalReceived > 0 ? formatPercentage(100) : '0.0%'}
                       </td>
                     </tr>
@@ -1143,23 +1275,23 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
               {/* Left Column (4 cols): Performance Distribution Donut Chart & Legend */}
               <div className="col-span-4 rounded-xl border border-[#C5D8EE] bg-white overflow-hidden flex flex-col justify-between">
-                <div className="bg-[#012E5E] text-white px-2.5 py-1.5 text-[10.5px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
+                <div className="bg-[#012E5E] text-white px-2 py-1 text-[10px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
                   <span>توزيع الأداء · Performance Distribution</span>
-                  <span className="text-[9.5px] text-[#DFC076]">التوزيع النسبي</span>
+                  <span className="text-[9px] text-[#DFC076]">التوزيع النسبي</span>
                 </div>
-                <div className="p-2 flex-1 flex flex-col items-center justify-between">
+                <div className="p-1.5 flex-1 flex flex-col items-center justify-between">
                   {activeServicesForChart.length > 0 ? (
                     <>
                       <div className="relative flex items-center justify-center my-0.5">
-                        <PieChart width={156} height={138}>
+                        <PieChart width={isPortrait ? 132 : 144} height={isPortrait ? 114 : 124}>
                           <Pie
                             data={activeServicesForChart}
                             dataKey="receivedCount"
                             nameKey="nameAr"
                             cx="50%"
                             cy="50%"
-                            innerRadius={38}
-                            outerRadius={62}
+                            innerRadius={isPortrait ? 30 : 34}
+                            outerRadius={isPortrait ? 50 : 54}
                             paddingAngle={2}
                             isAnimationActive={false}
                           >
@@ -1172,9 +1304,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </Pie>
                         </PieChart>
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
-                          <span className="text-[9px] font-bold text-slate-500">الإجمالي</span>
+                          <span className="text-[8.5px] font-bold text-slate-500">الإجمالي</span>
                           <span
-                            className="text-sm font-black text-[#012E5E] tabular-nums"
+                            className="text-xs font-black text-[#012E5E] tabular-nums"
                             dir="ltr"
                           >
                             {formatNumber(metrics.totalReceived)}
@@ -1185,7 +1317,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       <div
                         className={`w-full grid ${
                           orientation === 'portrait' ? 'grid-cols-1 gap-0.5' : 'grid-cols-2 gap-1'
-                        } text-[9px] pt-1 border-t border-slate-100`}
+                        } text-[8.5px] pt-1 border-t border-slate-100`}
                       >
                         {activeServicesForChart
                           .slice(0, orientation === 'portrait' ? 6 : 8)
@@ -1239,17 +1371,26 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 : '3. ملخص الخدمات ومؤشرات الإنجاز',
               'Services Summary & Completion Indicators'
             )}
-            <div className="p-2.5">
-              <table className="w-full text-[11px] border border-[#C5D8EE] border-collapse">
+            <div className="p-2">
+              <table className={`w-full ${isPortrait ? 'text-[10px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+                <colgroup>
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '30%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '17%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
                 <thead className="bg-[#012E5E] text-white">
                   <tr>
-                    <th className="py-1.5 px-2 text-center w-9 font-extrabold">#</th>
-                    <th className="py-1.5 px-2.5 text-start font-extrabold">الخدمة · Service</th>
-                    <th className="py-1.5 px-2 text-center w-24 font-extrabold">الطلبات المستلمة</th>
-                    <th className="py-1.5 px-2 text-center w-24 font-extrabold">الطلبات المنفذة</th>
-                    <th className="py-1.5 px-2.5 text-center w-36 font-extrabold">مؤشر الإنجاز</th>
-                    <th className="py-1.5 px-2 text-center w-20 font-extrabold">النسبة</th>
-                    <th className="py-1.5 px-2 text-center w-24 font-extrabold">المستوى</th>
+                    <th className="py-1 px-1 text-center font-extrabold">#</th>
+                    <th className="py-1 px-2 text-start font-extrabold">الخدمة · Service</th>
+                    <th className="py-1 px-1 text-center font-extrabold">الطلبات المستلمة</th>
+                    <th className="py-1 px-1 text-center font-extrabold">الطلبات المنفذة</th>
+                    <th className="py-1 px-2 text-center font-extrabold">مؤشر الإنجاز</th>
+                    <th className="py-1 px-1 text-center font-extrabold">النسبة</th>
+                    <th className="py-1 px-1 text-center font-extrabold">المستوى</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -1283,38 +1424,38 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                       >
                         <td
-                          className="py-1 px-2 text-center tabular-nums font-bold text-slate-600"
+                          className="py-0.5 px-1 text-center tabular-nums font-bold text-slate-600 report-num-cell"
                           dir="ltr"
                         >
                           {formatNumber(idx + 1)}
                         </td>
-                        <td className="py-1 px-2.5 font-extrabold text-[#012E5E]">
-                          <div className="flex items-center gap-2">
+                        <td className="py-0.5 px-2 font-extrabold text-[#012E5E]">
+                          <div className="flex items-center gap-1.5 min-w-0">
                             <span
-                              className="w-2.5 h-2.5 rounded-md shrink-0"
+                              className="w-2 h-2 rounded-md shrink-0"
                               style={{ backgroundColor: vis.color }}
                             />
-                            <span>{s.nameAr}</span>
+                            <span className="truncate">{s.nameAr}</span>
                           </div>
                         </td>
-                        <td className="py-1 px-2 text-center">
+                        <td className="py-0.5 px-1 text-center">
                           <span
                             dir="ltr"
-                            className="inline-flex items-center justify-center min-w-[58px] px-2 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums"
+                            className="inline-flex items-center justify-center min-w-[44px] px-1.5 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums report-num-cell"
                           >
                             {formatNumber(s.receivedCount)}
                           </span>
                         </td>
-                        <td className="py-1 px-2 text-center">
+                        <td className="py-0.5 px-1 text-center">
                           <span
                             dir="ltr"
-                            className="inline-flex items-center justify-center min-w-[58px] px-2 py-0.5 rounded bg-emerald-50/70 border border-emerald-300 font-black text-[#069B74] tabular-nums"
+                            className="inline-flex items-center justify-center min-w-[44px] px-1.5 py-0.5 rounded bg-emerald-50/70 border border-emerald-300 font-black text-[#069B74] tabular-nums report-num-cell"
                           >
                             {formatNumber(s.executedCount)}
                           </span>
                         </td>
-                        <td className="py-1 px-2.5 align-middle">
-                          <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden border border-slate-300/80">
+                        <td className="py-0.5 px-2 align-middle">
+                          <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden border border-slate-300/80">
                             <div
                               className="h-full rounded-full"
                               style={{
@@ -1325,14 +1466,14 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </td>
                         <td
-                          className="py-1 px-2 text-center font-black tabular-nums text-[#012E5E]"
+                          className="py-0.5 px-1 text-center font-black tabular-nums text-[#012E5E] report-num-cell"
                           dir="ltr"
                         >
                           {formatPct(s.completionPct, '—')}
                         </td>
-                        <td className="py-1 px-2 text-center">
+                        <td className="py-0.5 px-1 text-center">
                           <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeClass}`}
+                            className={`inline-block px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold border report-num-cell ${badgeClass}`}
                           >
                             {s.level.labelAr}
                           </span>
@@ -1344,17 +1485,17 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 {showFooter && (
                   <tfoot className="bg-[#012E5E] text-white font-extrabold">
                     <tr>
-                      <td colSpan={2} className="py-1.5 px-3">
+                      <td colSpan={2} className="py-1 px-2">
                         الإجمالي العام ({formatNumber(sortedSummary.length)} خدمة) · Grand Total
                       </td>
-                      <td className="py-1.5 px-2 text-center tabular-nums text-[#DFC076]" dir="ltr">
+                      <td className="py-1 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalReceived)}
                       </td>
-                      <td className="py-1.5 px-2 text-center tabular-nums text-emerald-300" dir="ltr">
+                      <td className="py-1 px-1 text-center tabular-nums text-emerald-300 report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalExecuted)}
                       </td>
-                      <td className="py-1.5 px-2.5 align-middle">
-                        <div className="w-full h-2.5 bg-white/20 rounded-full overflow-hidden">
+                      <td className="py-1 px-2 align-middle">
+                        <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-[#DFC076] rounded-full"
                             style={{
@@ -1363,10 +1504,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           />
                         </div>
                       </td>
-                      <td className="py-1.5 px-2 text-center tabular-nums text-[#DFC076]" dir="ltr">
+                      <td className="py-1 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
                         {formatPct(metrics.overallCompletionPct, '—')}
                       </td>
-                      <td className="py-1.5 px-2 text-center text-[#DFC076]">المعدل العام</td>
+                      <td className="py-1 px-1 text-center text-[#DFC076] report-num-cell">المعدل العام</td>
                     </tr>
                   </tfoot>
                 )}
@@ -1378,11 +1519,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
       case 'sec4_5_contracts_safety':
         return (
-          <div key={key} className="grid grid-cols-12 gap-3 items-stretch">
+          <div key={key} className={`grid grid-cols-12 ${isPortrait ? 'gap-2' : 'gap-2.5'} items-stretch`}>
             {/* Section 4: العقود والرخص */}
             <section className="col-span-7 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('4. العقود والرخص', 'Contracts & Licenses')}
-              <div className="p-2.5 grid grid-cols-3 gap-2 flex-1">
+              <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} grid grid-cols-3 flex-1`}>
                 {report.contracts.map((c, idx) => {
                   const cardSkins = [
                     'from-[#EAF4FC] to-[#F7FAFC] border-[#96C2EC]',
@@ -1401,31 +1542,31 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         <div
                           className={`${
                             headerSkins[idx % headerSkins.length]
-                          } text-white px-2.5 py-1.5 text-[10.5px] font-extrabold ${
+                          } text-white px-2 py-1 text-[10px] font-extrabold ${
                             orientation === 'portrait'
                               ? 'flex flex-col items-start gap-0.5'
                               : 'flex items-center justify-between gap-1'
                           }`}
                         >
                           <span className="leading-tight">{c.nameAr}</span>
-                          <span className="text-[8.5px] text-white/85 font-mono shrink-0 leading-tight" dir="ltr">
+                          <span className="text-[8px] text-white/85 font-mono shrink-0 leading-tight" dir="ltr">
                             {c.nameEn}
                           </span>
                         </div>
-                        <div className="p-2 grid grid-cols-2 gap-1.5 text-center">
-                          <div className="bg-white rounded-lg p-1.5 border border-emerald-300 shadow-2xs">
-                            <p className="text-[9.5px] font-extrabold text-[#069B74]">الفعّالة</p>
+                        <div className="p-1.5 grid grid-cols-2 gap-1 text-center">
+                          <div className="bg-white rounded-lg p-1 border border-emerald-300 shadow-2xs">
+                            <p className={`${isPortrait ? 'text-[8.5px]' : 'text-[9px]'} font-extrabold text-[#069B74]`}>الفعّالة</p>
                             <p
-                              className="text-base font-black text-[#069B74] tabular-nums mt-0.5"
+                              className="text-sm font-black text-[#069B74] tabular-nums mt-0.5"
                               dir="ltr"
                             >
                               {formatNumber(c.activeCount)}
                             </p>
                           </div>
-                          <div className="bg-white rounded-lg p-1.5 border border-rose-300 shadow-2xs">
-                            <p className="text-[9.5px] font-extrabold text-[#C43D47]">غير الفعّالة</p>
+                          <div className="bg-white rounded-lg p-1 border border-rose-300 shadow-2xs">
+                            <p className={`${isPortrait ? 'text-[8.5px]' : 'text-[9px]'} font-extrabold text-[#C43D47]`}>غير الفعّالة</p>
                             <p
-                              className="text-base font-black text-[#C43D47] tabular-nums mt-0.5"
+                              className="text-sm font-black text-[#C43D47] tabular-nums mt-0.5"
                               dir="ltr"
                             >
                               {formatNumber(c.inactiveCount)}
@@ -1433,10 +1574,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </div>
                       </div>
-                      <div className="px-2 pb-2 flex-1 flex flex-col">
-                        <div className="bg-white/90 rounded-lg p-2 border border-slate-200 text-[10px] min-h-[60px] flex-1">
+                      <div className="px-1.5 pb-1.5 flex-1 flex flex-col">
+                        <div className="bg-white/90 rounded-lg p-1.5 border border-slate-200 text-[9.5px] min-h-[48px] flex-1">
                           <p className="font-extrabold text-[#012E5E] mb-0.5">الملاحظات:</p>
-                          <p className="text-slate-700 whitespace-pre-wrap break-words leading-relaxed">
+                          <p className="text-slate-700 report-text-cell">
                             {c.notes || 'لا توجد ملاحظات مسجلة'}
                           </p>
                         </div>
@@ -1450,7 +1591,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             {/* Section 5: الطفايات وملاحظات المخاطر */}
             <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('5. الطفايات وملاحظات المخاطر', 'Fire Safety & Hazard Notes')}
-              <div className="p-2.5 grid grid-cols-2 gap-2 flex-1">
+              <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} grid grid-cols-2 flex-1`}>
                 {report.safety.map((s, idx) => {
                   const isFire = s.groupKey === 'fire_extinguishers' || idx === 0;
                   const photoSrc = isFire ? fireExtImg : safetyImg;
@@ -1462,34 +1603,34 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       className="rounded-xl border border-[#C5D8EE] bg-gradient-to-b from-[#F7FAFC] to-white overflow-hidden flex flex-col justify-between shadow-2xs"
                     >
                       <div>
-                        <div className="bg-[#012E5E] text-white px-2 py-1.5 text-[10px] font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]">
+                        <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'} font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]`}>
                           <span className="leading-tight">{s.nameAr}</span>
-                          <Flame className="w-3.5 h-3.5 text-[#DFC076] shrink-0" />
+                          <Flame className="w-3 h-3 text-[#DFC076] shrink-0" />
                         </div>
-                        <div className="p-2 pb-1.5 flex items-center gap-1.5">
+                        <div className={`${isPortrait ? 'p-1.5 pb-1 gap-1' : 'p-2 pb-1.5 gap-1.5'} flex items-center`}>
                           <img
                             src={photoSrc}
                             alt={s.nameAr}
-                            className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                            className={`${isPortrait ? 'w-8 h-8' : 'w-10 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                           />
                           <div className="flex-1 grid grid-cols-2 gap-1 text-center">
-                            <div className="bg-emerald-50 rounded-lg p-1 border border-emerald-300">
-                              <p className="text-[9px] font-bold text-[#069B74]">
+                            <div className="bg-emerald-50 rounded-lg p-0.5 border border-emerald-300">
+                              <p className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} font-bold text-[#069B74] leading-tight`}>
                                 {primaryLabel}
                               </p>
                               <p
-                                className="text-sm font-black text-[#069B74] tabular-nums"
+                                className="text-xs font-black text-[#069B74] tabular-nums"
                                 dir="ltr"
                               >
                                 {formatNumber(s.primaryCount)}
                               </p>
                             </div>
-                            <div className="bg-rose-50 rounded-lg p-1 border border-rose-300">
-                              <p className="text-[9px] font-bold text-[#C43D47]">
+                            <div className="bg-rose-50 rounded-lg p-0.5 border border-rose-300">
+                              <p className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} font-bold text-[#C43D47] leading-tight`}>
                                 {secondaryLabel}
                               </p>
                               <p
-                                className="text-sm font-black text-[#C43D47] tabular-nums"
+                                className="text-xs font-black text-[#C43D47] tabular-nums"
                                 dir="ltr"
                               >
                                 {formatNumber(s.secondaryCount)}
@@ -1498,10 +1639,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </div>
                       </div>
-                      <div className="px-2 pb-2 flex-1 flex flex-col">
-                        <div className="bg-white rounded-lg p-2 border border-slate-200 text-[10px] min-h-[60px] flex-1">
+                      <div className="px-1.5 pb-1.5 flex-1 flex flex-col">
+                        <div className="bg-white rounded-lg p-1.5 border border-slate-200 text-[9.5px] min-h-[48px] flex-1">
                           <p className="font-extrabold text-[#012E5E] mb-0.5">الملاحظات:</p>
-                          <p className="text-slate-700 whitespace-pre-wrap break-words leading-relaxed">
+                          <p className="text-slate-700 report-text-cell">
                             {s.notes || 'لا توجد ملاحظات مسجلة'}
                           </p>
                         </div>
@@ -1516,7 +1657,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
       case 'sec6_matrix': {
         const slicedSites = sites.slice(block.siteStart, block.siteEnd);
-        const maxCatsPerTable = orientation === 'portrait' ? 8 : 12;
+        const maxCatsPerTable = orientation === 'portrait' ? 7 : 12;
         const chunks: MaintenanceCategory[][] = [];
         for (let i = 0; i < categories.length; i += maxCatsPerTable) {
           chunks.push(categories.slice(i, i + maxCatsPerTable));
@@ -1529,26 +1670,26 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               '6. تفاصيل الصيانة بالمقرات والتكاليف المالية',
               'Maintenance Details by Site, Fault Category & Financial Costs'
             )}
-            <div className={isCompactSheet ? 'p-2 space-y-1.5' : 'p-2.5 space-y-2.5'}>
+            <div className={isCompactSheet ? 'p-1.5 space-y-1' : 'p-2 space-y-2'}>
               {/* 4 Maintenance KPI Cards */}
               {block.siteStart === 0 && (
-                <div className="grid grid-cols-4 gap-2">
-                  <div className="rounded-xl border border-[#96C2EC] bg-gradient-to-br from-[#EAF4FC] to-white p-2 shadow-2xs">
-                    <p className="text-[10px] font-bold text-[#0C4176]">إجمالي الأعطال المسجلة</p>
-                    <p className="text-base font-black text-[#012E5E] tabular-nums mt-0.5" dir="ltr">
+                <div className="grid grid-cols-4 gap-1.5">
+                  <div className="rounded-xl border border-[#96C2EC] bg-gradient-to-br from-[#EAF4FC] to-white p-1.5 shadow-2xs">
+                    <p className="text-[9.5px] font-bold text-[#0C4176]">إجمالي الأعطال المسجلة</p>
+                    <p className="text-sm font-black text-[#012E5E] tabular-nums mt-0.5" dir="ltr">
                       {formatNumber(metrics.maintenance.grandTotalFaults)}
                     </p>
-                    <p className="text-[9px] text-slate-600">
+                    <p className="text-[8.5px] text-slate-600">
                       موزعة على {formatNumber(sites.length)} مقرات
                     </p>
                   </div>
 
-                  <div className="rounded-xl border border-[#DEC488] bg-gradient-to-br from-[#FDF8EC] to-white p-2 shadow-2xs">
-                    <p className="text-[10px] font-bold text-[#785817]">المقر الأعلى في الأعطال</p>
-                    <p className="text-xs font-black text-[#012E5E] truncate mt-0.5">
+                  <div className="rounded-xl border border-[#DEC488] bg-gradient-to-br from-[#FDF8EC] to-white p-1.5 shadow-2xs">
+                    <p className="text-[9.5px] font-bold text-[#785817]">المقر الأعلى في الأعطال</p>
+                    <p className="text-[11px] font-black text-[#012E5E] truncate mt-0.5">
                       {topFaultSite ? topFaultSite.site.nameAr : 'لا توجد أعطال'}
                     </p>
-                    <p className="text-[9.5px] font-extrabold text-[#9A6700]">
+                    <p className="text-[9px] font-extrabold text-[#9A6700]">
                       {topFaultSite ? (
                         <>
                           <span dir="ltr" className="tabular-nums">
@@ -1562,30 +1703,30 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                     </p>
                   </div>
 
-                  <div className="rounded-xl border border-[#8FD4C1] bg-gradient-to-br from-[#E3F7F3] to-white p-2 shadow-2xs">
-                    <p className="text-[10px] font-bold text-[#056C51]">إجمالي التكلفة / النثرية</p>
-                    <p className="text-sm font-black text-[#069B74] tabular-nums mt-0.5" dir="ltr">
+                  <div className="rounded-xl border border-[#8FD4C1] bg-gradient-to-br from-[#E3F7F3] to-white p-1.5 shadow-2xs">
+                    <p className="text-[9.5px] font-bold text-[#056C51]">إجمالي التكلفة / النثرية</p>
+                    <p className="text-xs font-black text-[#069B74] tabular-nums mt-0.5" dir="ltr">
                       {formatAed(metrics.maintenance.pettyCashTotalAed)}
                     </p>
-                    <p className="text-[9px] text-slate-600">مصروفات الصيانة النثرية</p>
+                    <p className="text-[8.5px] text-slate-600">مصروفات الصيانة النثرية</p>
                   </div>
 
-                  <div className="rounded-xl border border-[#B3C2F2] bg-gradient-to-br from-[#E7EBFC] to-white p-2 shadow-2xs">
-                    <p className="text-[10px] font-bold text-[#012E5E]">إجمالي التكلفة / أمر شراء</p>
-                    <p className="text-sm font-black text-[#0C4176] tabular-nums mt-0.5" dir="ltr">
+                  <div className="rounded-xl border border-[#B3C2F2] bg-gradient-to-br from-[#E7EBFC] to-white p-1.5 shadow-2xs">
+                    <p className="text-[9.5px] font-bold text-[#012E5E]">إجمالي التكلفة / أمر شراء</p>
+                    <p className="text-xs font-black text-[#0C4176] tabular-nums mt-0.5" dir="ltr">
                       {formatAed(metrics.maintenance.purchaseOrderTotalAed)}
                     </p>
-                    <p className="text-[9px] text-slate-600">أوامر الشراء المعتمدة</p>
+                    <p className="text-[8.5px] text-slate-600">أوامر الشراء المعتمدة</p>
                   </div>
                 </div>
               )}
 
               {/* Full Sites × Categories Matrix Table */}
-              <div className="w-full space-y-2">
+              <div className="w-full space-y-1.5">
                 {chunks.map((chunkCats, chunkIdx) => {
                   const isLastChunk = chunkIdx === chunks.length - 1;
-                  const siteColPct = 15;
-                  const totalColPct = isLastChunk ? 9.5 : 0;
+                  const siteColPct = isPortrait ? 17 : 15;
+                  const totalColPct = isLastChunk ? (isPortrait ? 13 : 11) : 0;
                   const catCount = chunkCats.length || 1;
                   const catColPct = Number(
                     ((100 - siteColPct - totalColPct) / catCount).toFixed(3)
@@ -1593,7 +1734,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   return (
                     <table
                       key={chunkIdx}
-                      className="w-full text-[10px] border border-[#C5D8EE] table-fixed border-collapse"
+                      className="w-full text-[9.5px] border border-[#C5D8EE] table-fixed border-collapse"
                     >
                       <colgroup>
                         <col style={{ width: `${siteColPct}%` }} />
@@ -1769,59 +1910,68 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
           </section>
         );
 
-      case 'sec7_8_maint_logistics':
+      case 'sec7_8_maint_logistics': {
+        const logChCount = Math.max(1, metrics.logisticsWithPct.length);
+        const logChPct = Number(((100 - 18 - 15) / logChCount).toFixed(3));
         return (
-          <div key={key} className="grid grid-cols-12 gap-3 items-stretch">
+          <div key={key} className={`grid grid-cols-12 ${isPortrait ? 'gap-2' : 'gap-2.5'} items-stretch`}>
             {/* SECTION 8: الدعم اللوجستي */}
             <section className="col-span-7 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('8. الدعم اللوجستي', 'Logistics Channels')}
-              <div className="p-2.5 space-y-2 flex-1 flex flex-col justify-between">
-                <table className="w-full text-[10.5px] border border-[#C5D8EE] border-collapse table-fixed">
+              <div className="p-2 space-y-1.5 flex-1 flex flex-col justify-between">
+                <table className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+                  <colgroup>
+                    <col style={{ width: '18%' }} />
+                    {metrics.logisticsWithPct.map((l) => (
+                      <col key={l.channelKey} style={{ width: `${logChPct}%` }} />
+                    ))}
+                    <col style={{ width: '15%' }} />
+                  </colgroup>
                   <thead className="bg-[#012E5E] text-white">
                     <tr>
-                      <th className="py-1 px-2 text-start font-extrabold w-22">البيان</th>
+                      <th className="py-1 px-1.5 text-start font-extrabold">البيان</th>
                       {metrics.logisticsWithPct.map((l) => (
-                        <th key={l.channelKey} className="py-1 px-1 text-center font-extrabold">
+                        <th key={l.channelKey} className="py-1 px-1 text-center font-extrabold leading-tight">
                           {l.nameAr}
                         </th>
                       ))}
-                      <th className="py-1 px-1.5 text-center font-extrabold bg-[#0C4176] w-18">
+                      <th className="py-1 px-1 text-center font-extrabold bg-[#0C4176]">
                         الإجمالي
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     <tr className="bg-white">
-                      <td className="py-1 px-2 font-extrabold text-[#012E5E]">الطلبات</td>
+                      <td className="py-1 px-1.5 font-extrabold text-[#012E5E]">الطلبات</td>
                       {metrics.logisticsWithPct.map((l) => (
                         <td
                           key={l.channelKey}
-                          className="py-1 px-1 text-center font-black text-[#012E5E] tabular-nums"
+                          className="py-1 px-1 text-center font-black text-[#012E5E] tabular-nums report-num-cell"
                           dir="ltr"
                         >
                           {formatNumber(l.requestCount)}
                         </td>
                       ))}
                       <td
-                        className="py-1 px-1.5 text-center font-black text-[#012E5E] bg-[#EAF4FC] tabular-nums"
+                        className="py-1 px-1 text-center font-black text-[#012E5E] bg-[#EAF4FC] tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {formatNumber(metrics.logisticsTotal)}
                       </td>
                     </tr>
                     <tr className="bg-[#F4F8FC]">
-                      <td className="py-1 px-2 font-bold text-slate-600">النسبة المئوية</td>
+                      <td className="py-1 px-1.5 font-bold text-slate-600">النسبة المئوية</td>
                       {metrics.logisticsWithPct.map((l) => (
                         <td
                           key={l.channelKey}
-                          className="py-1 px-1 text-center font-bold text-[#1769AA] tabular-nums"
+                          className="py-1 px-1 text-center font-bold text-[#1769AA] tabular-nums report-num-cell"
                           dir="ltr"
                         >
                           {formatPct(l.sharePct, '0.0%')}
                         </td>
                       ))}
                       <td
-                        className="py-1 px-1.5 text-center font-extrabold text-[#069B74] bg-[#EAF4FC] tabular-nums"
+                        className="py-1 px-1 text-center font-extrabold text-[#069B74] bg-[#EAF4FC] tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {metrics.logisticsTotal > 0 ? formatPercentage(100) : '0.0%'}
@@ -1837,45 +1987,50 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             {/* SECTION 7: خدمات الصيانة (Sources Table + Donut Chart) */}
             <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('7. خدمات الصيانة (مصادر الطلبات)', 'Maintenance Services Sources')}
-              <div className="p-2.5 space-y-2 flex-1 flex flex-col justify-between">
-                <table className="w-full text-[11px] border border-[#C5D8EE] border-collapse">
+              <div className="p-2 space-y-1.5 flex-1 flex flex-col justify-between">
+                <table className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+                  <colgroup>
+                    <col style={{ width: '56%' }} />
+                    <col style={{ width: '21%' }} />
+                    <col style={{ width: '23%' }} />
+                  </colgroup>
                   <thead className="bg-[#012E5E] text-white">
                     <tr>
-                      <th className="py-1 px-2 text-start font-extrabold">مصدر طلب الصيانة</th>
-                      <th className="py-1 px-2 text-center font-extrabold w-16">العدد</th>
-                      <th className="py-1 px-2 text-center font-extrabold w-16">النسبة</th>
+                      <th className="py-1 px-1.5 text-start font-extrabold">مصدر طلب الصيانة</th>
+                      <th className="py-1 px-1 text-center font-extrabold">العدد</th>
+                      <th className="py-1 px-1 text-center font-extrabold">النسبة</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     <tr className="bg-white">
-                      <td className="py-1.5 px-2 font-extrabold text-[#012E5E]">
+                      <td className="py-1 px-1.5 font-extrabold text-[#012E5E] leading-snug">
                         عدد طلبات الصيانة الواردة من قسم المرافق
                       </td>
                       <td
-                        className="py-1.5 px-2 text-center font-black text-[#0C4176] tabular-nums"
+                        className="py-1 px-1 text-center font-black text-[#0C4176] tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {formatNumber(maintFromFM)}
                       </td>
                       <td
-                        className="py-1.5 px-2 text-center font-bold text-slate-600 tabular-nums"
+                        className="py-1 px-1 text-center font-bold text-slate-600 tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {formatPercentage(maintFmPct)}
                       </td>
                     </tr>
                     <tr className="bg-[#F4F8FC]">
-                      <td className="py-1.5 px-2 font-extrabold text-[#012E5E]">
+                      <td className="py-1 px-1.5 font-extrabold text-[#012E5E] leading-snug">
                         عدد طلبات الصيانة الواردة من الإدارات الأخرى
                       </td>
                       <td
-                        className="py-1.5 px-2 text-center font-black text-[#9A6700] tabular-nums"
+                        className="py-1 px-1 text-center font-black text-[#9A6700] tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {formatNumber(maintFromOther)}
                       </td>
                       <td
-                        className="py-1.5 px-2 text-center font-bold text-slate-600 tabular-nums"
+                        className="py-1 px-1 text-center font-bold text-slate-600 tabular-nums report-num-cell"
                         dir="ltr"
                       >
                         {formatPercentage(maintOtherPct)}
@@ -1884,30 +2039,30 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   </tbody>
                   <tfoot className="bg-[#012E5E] text-white font-extrabold">
                     <tr>
-                      <td className="py-1.5 px-2">الإجمالي · Total</td>
-                      <td className="py-1.5 px-2 text-center tabular-nums text-[#DFC076]" dir="ltr">
+                      <td className="py-1 px-1.5">الإجمالي · Total</td>
+                      <td className="py-1 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
                         {formatNumber(maintTotal)}
                       </td>
-                      <td className="py-1.5 px-2 text-center tabular-nums" dir="ltr">
+                      <td className="py-1 px-1 text-center tabular-nums report-num-cell" dir="ltr">
                         {maintTotal > 0 ? formatPercentage(100) : '0.0%'}
                       </td>
                     </tr>
                   </tfoot>
                 </table>
 
-                <div className="rounded-xl border border-[#C5D8EE] bg-[#F7FAFC] p-2 flex items-center justify-between gap-2">
+                <div className="rounded-xl border border-[#C5D8EE] bg-[#F7FAFC] p-1.5 flex items-center justify-between gap-1.5">
                   <div className="relative flex items-center justify-center shrink-0">
                     {maintChartData.length > 0 ? (
                       <>
-                        <PieChart width={108} height={98}>
+                        <PieChart width={isPortrait ? 86 : 102} height={isPortrait ? 80 : 92}>
                           <Pie
                             data={maintChartData}
                             dataKey="value"
                             nameKey="name"
                             cx="50%"
                             cy="50%"
-                            innerRadius={27}
-                            outerRadius={43}
+                            innerRadius={isPortrait ? 20 : 25}
+                            outerRadius={isPortrait ? 34 : 40}
                             paddingAngle={2}
                             isAnimationActive={false}
                           >
@@ -1918,7 +2073,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         </PieChart>
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                           <span
-                            className="text-xs font-black text-[#012E5E] tabular-nums"
+                            className="text-[11px] font-black text-[#012E5E] tabular-nums"
                             dir="ltr"
                           >
                             {formatNumber(maintTotal)}
@@ -1926,30 +2081,30 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         </div>
                       </>
                     ) : (
-                      <div className="w-20 h-20 flex items-center justify-center text-[10px] text-slate-400">
+                      <div className="w-16 h-16 flex items-center justify-center text-[9.5px] text-slate-400">
                         لا توجد بيانات
                       </div>
                     )}
                   </div>
-                  <div className="flex-1 space-y-1 text-[10px]">
-                    <p className="font-extrabold text-[#012E5E] text-[11px]">
+                  <div className={`flex-1 space-y-1 min-w-0 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'}`}>
+                    <p className={`font-extrabold text-[#012E5E] ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'}`}>
                       توزيع مصادر طلبات الصيانة
                     </p>
-                    <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-[#0C4176]" />
-                        <span className="font-bold text-[#012E5E]">من قسم المرافق</span>
+                    <div className="flex items-center justify-between gap-1 bg-white px-1.5 py-1 rounded-lg border border-slate-200">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-[#0C4176] shrink-0" />
+                        <span className="font-bold text-[#012E5E] truncate">من قسم المرافق</span>
                       </div>
-                      <span className="font-extrabold text-[#0C4176] tabular-nums" dir="ltr">
+                      <span className="font-extrabold text-[#0C4176] tabular-nums report-num-cell shrink-0" dir="ltr">
                         {formatNumber(maintFromFM)} ({formatPercentage(maintFmPct)})
                       </span>
                     </div>
-                    <div className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-[#C99E4A]" />
-                        <span className="font-bold text-[#012E5E]">من الإدارات الأخرى</span>
+                    <div className="flex items-center justify-between gap-1 bg-white px-1.5 py-1 rounded-lg border border-slate-200">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="w-2 h-2 rounded-full bg-[#C99E4A] shrink-0" />
+                        <span className="font-bold text-[#012E5E] truncate">من الإدارات الأخرى</span>
                       </div>
-                      <span className="font-extrabold text-[#9A6700] tabular-nums" dir="ltr">
+                      <span className="font-extrabold text-[#9A6700] tabular-nums report-num-cell shrink-0" dir="ltr">
                         {formatNumber(maintFromOther)} ({formatPercentage(maintOtherPct)})
                       </span>
                     </div>
@@ -1959,6 +2114,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             </section>
           </div>
         );
+      }
 
       case 'sec9_security': {
         const secItems = metrics.securityWithPct;
@@ -1975,17 +2131,28 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               '9. خدمات الأمن والاستقبال',
               'Security & Reception Services Matrix'
             )}
-            <div className="p-2.5 space-y-2">
+            <div className="p-2 space-y-1.5">
               {chunks.map((chunk, cIdx) => {
                 const isLast = cIdx === chunks.length - 1;
+                const labelColPct = isPortrait ? 18 : 14;
+                const totalColPct = isLast ? (isPortrait ? 18 : 13) : 0;
+                const itemCount = Math.max(1, chunk.length);
+                const itemColPct = Number(((100 - labelColPct - totalColPct) / itemCount).toFixed(3));
                 return (
                   <table
                     key={cIdx}
-                    className="w-full text-[10.5px] border border-[#C5D8EE] border-collapse table-fixed"
+                    className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} border border-[#C5D8EE] border-collapse table-fixed`}
                   >
+                    <colgroup>
+                      <col style={{ width: `${labelColPct}%` }} />
+                      {chunk.map((sr) => (
+                        <col key={sr.activityKey} style={{ width: `${itemColPct}%` }} />
+                      ))}
+                      {isLast && <col style={{ width: `${totalColPct}%` }} />}
+                    </colgroup>
                     <thead className="bg-[#012E5E] text-white">
                       <tr>
-                        <th className="py-1 px-2 text-start font-extrabold w-28">البيان</th>
+                        <th className="py-1 px-1.5 text-start font-extrabold">البيان</th>
                         {chunk.map((sr) => (
                           <th
                             key={sr.activityKey}
@@ -1995,7 +2162,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </th>
                         ))}
                         {isLast && (
-                          <th className="py-1 px-2 text-center font-extrabold bg-[#0C4176] w-24">
+                          <th className="py-1 px-1.5 text-center font-extrabold bg-[#0C4176]">
                             الإجمالي ({formatNumber(secItems.length)})
                           </th>
                         )}
@@ -2003,11 +2170,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       <tr className="bg-white">
-                        <td className="py-1 px-2 font-extrabold text-[#012E5E]">الطلبات المستلمة</td>
+                        <td className="py-1 px-1.5 font-extrabold text-[#012E5E]">الطلبات المستلمة</td>
                         {chunk.map((sr) => (
                           <td
                             key={sr.activityKey}
-                            className="py-1 px-1 text-center font-black text-[#012E5E] tabular-nums"
+                            className="py-1 px-1 text-center font-black text-[#012E5E] tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatNumber(sr.receivedCount)}
@@ -2015,7 +2182,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         ))}
                         {isLast && (
                           <td
-                            className="py-1 px-2 text-center font-black text-[#012E5E] bg-[#EAF4FC] tabular-nums"
+                            className="py-1 px-1.5 text-center font-black text-[#012E5E] bg-[#EAF4FC] tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatNumber(metrics.securityTotals.totalReceived)}
@@ -2023,11 +2190,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         )}
                       </tr>
                       <tr className="bg-[#F4F8FC]">
-                        <td className="py-1 px-2 font-extrabold text-[#069B74]">الطلبات المنفذة</td>
+                        <td className="py-1 px-1.5 font-extrabold text-[#069B74]">الطلبات المنفذة</td>
                         {chunk.map((sr) => (
                           <td
                             key={sr.activityKey}
-                            className="py-1 px-1 text-center font-black text-[#069B74] tabular-nums"
+                            className="py-1 px-1 text-center font-black text-[#069B74] tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatNumber(sr.executedCount)}
@@ -2035,7 +2202,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         ))}
                         {isLast && (
                           <td
-                            className="py-1 px-2 text-center font-black text-[#069B74] bg-emerald-50 tabular-nums"
+                            className="py-1 px-1.5 text-center font-black text-[#069B74] bg-emerald-50 tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatNumber(metrics.securityTotals.totalExecuted)}
@@ -2043,11 +2210,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         )}
                       </tr>
                       <tr className="bg-white">
-                        <td className="py-1 px-2 font-extrabold text-[#1769AA]">نسبة الإنجاز</td>
+                        <td className="py-1 px-1.5 font-extrabold text-[#1769AA]">نسبة الإنجاز</td>
                         {chunk.map((sr) => (
                           <td
                             key={sr.activityKey}
-                            className="py-1 px-1 text-center font-extrabold text-[#1769AA] tabular-nums"
+                            className="py-1 px-1 text-center font-extrabold text-[#1769AA] tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatPct(sr.completionPct, '—')}
@@ -2055,7 +2222,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         ))}
                         {isLast && (
                           <td
-                            className="py-1 px-2 text-center font-black text-[#012E5E] bg-[#FDF8EC] tabular-nums"
+                            className="py-1 px-1.5 text-center font-black text-[#012E5E] bg-[#FDF8EC] tabular-nums report-num-cell"
                             dir="ltr"
                           >
                             {formatPct(metrics.securityTotals.overallCompletionPct, '—')}
@@ -2082,18 +2249,26 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 : '10. المهام التشغيلية والمتابعة',
               'Operational Tasks & Milestones'
             )}
-            <div className="p-2.5">
-              <table className="w-full text-[11px] border border-[#C5D8EE] border-collapse">
+            <div className="p-2">
+              <table className={`w-full ${isPortrait ? 'text-[10px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+                <colgroup>
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '22%' }} />
+                  <col style={{ width: '39%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
                 <thead className="bg-[#012E5E] text-white">
                   <tr>
-                    <th className="py-1.5 px-2 text-center w-9 font-extrabold">#</th>
-                    <th className="py-1.5 px-2 text-start w-1/4 font-extrabold">
+                    <th className="py-1 px-1 text-center font-extrabold">#</th>
+                    <th className="py-1 px-2 text-start font-extrabold">
                       الموضوع · Subject
                     </th>
-                    <th className="py-1.5 px-2 text-start font-extrabold">المهمة · Task</th>
-                    <th className="py-1.5 px-2 text-center w-24 font-extrabold">الحالة</th>
-                    <th className="py-1.5 px-2 text-center w-20 font-extrabold">نسبة الإنجاز</th>
-                    <th className="py-1.5 px-2 text-center w-28 font-extrabold">المؤشر</th>
+                    <th className="py-1 px-2 text-start font-extrabold">المهمة · Task</th>
+                    <th className="py-1 px-1 text-center font-extrabold">الحالة</th>
+                    <th className="py-1 px-1 text-center font-extrabold">نسبة الإنجاز</th>
+                    <th className="py-1 px-2 text-center font-extrabold">المؤشر</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -2120,38 +2295,38 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className={`align-middle ${idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}`}
                       >
                         <td
-                          className="py-1.5 px-2 text-center tabular-nums font-bold align-middle"
+                          className="py-1 px-1 text-center tabular-nums font-bold align-middle report-num-cell"
                           dir="ltr"
                         >
                           {formatNumber(idx + 1)}
                         </td>
                         <td
-                          className="py-1.5 px-2 subject-cell whitespace-pre-wrap break-words leading-[1.45] font-extrabold text-[#012E5E] align-middle"
+                          className="py-1 px-2 subject-cell report-text-cell font-extrabold text-[#012E5E] align-middle"
                           dir="rtl"
                         >
                           {t.topic || '—'}
                         </td>
                         <td
-                          className="py-1.5 px-2 whitespace-pre-wrap break-words leading-[1.45] text-slate-800 align-middle"
+                          className="py-1 px-2 report-text-cell text-slate-800 align-middle"
                           dir="rtl"
                         >
                           {t.taskName || '—'}
                         </td>
-                        <td className="py-1.5 px-2 text-center align-middle">
+                        <td className="py-1 px-1 text-center align-middle">
                           <span
-                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${statusColors}`}
+                            className={`inline-block px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold border report-num-cell ${statusColors}`}
                           >
                             {TASK_STATUS_LABELS_AR[t.status]}
                           </span>
                         </td>
                         <td
-                          className="py-1.5 px-2 text-center tabular-nums font-black text-[#012E5E] align-middle"
+                          className="py-1 px-1 text-center tabular-nums font-black text-[#012E5E] align-middle report-num-cell"
                           dir="ltr"
                         >
                           {formatPercentage(pct)}
                         </td>
-                        <td className="py-1.5 px-2 align-middle">
-                          <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden border border-slate-300">
+                        <td className="py-1 px-2 align-middle">
+                          <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden border border-slate-300">
                             <div
                               className="h-full rounded-full"
                               style={{ width: `${pct}%`, backgroundColor: barFill }}
@@ -2179,18 +2354,24 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 : '11. التحديات والتوصيات',
               'Challenges & Executive Recommendations'
             )}
-            <div className="p-2.5">
-              <table className="w-full text-[11px] border border-[#C5D8EE] border-collapse">
+            <div className="p-2">
+              <table className={`w-full ${isPortrait ? 'text-[10px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+                <colgroup>
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '25%' }} />
+                  <col style={{ width: '37%' }} />
+                  <col style={{ width: '33%' }} />
+                </colgroup>
                 <thead className="bg-[#012E5E] text-white">
                   <tr>
-                    <th className="py-1.5 px-2 text-center w-9 font-extrabold">#</th>
-                    <th className="py-1.5 px-2 text-start w-1/4 font-extrabold">
+                    <th className="py-1 px-1 text-center font-extrabold">#</th>
+                    <th className="py-1 px-2 text-start font-extrabold">
                       التحديات والعوائق · Challenges
                     </th>
-                    <th className="py-1.5 px-2 text-start w-2/5 font-extrabold">
+                    <th className="py-1 px-2 text-start font-extrabold">
                       التحديث والإجراءات المتخذة · Updates
                     </th>
-                    <th className="py-1.5 px-2 text-start w-1/3 font-extrabold">
+                    <th className="py-1 px-2 text-start font-extrabold">
                       التوصية التنفيذية · Recommendation
                     </th>
                   </tr>
@@ -2204,18 +2385,18 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                       >
                         <td
-                          className="py-1.5 px-2 text-center tabular-nums font-bold align-top"
+                          className="py-1 px-1 text-center tabular-nums font-bold align-top report-num-cell"
                           dir="ltr"
                         >
                           {formatNumber(idx + 1)}
                         </td>
-                        <td className="py-1.5 px-2 whitespace-pre-wrap break-words leading-relaxed font-extrabold text-[#9A6700] align-top">
+                        <td className="py-1 px-2 report-text-cell font-extrabold text-[#9A6700] align-top">
                           {ch.challengeText || '—'}
                         </td>
-                        <td className="py-1.5 px-2 whitespace-pre-wrap break-words leading-relaxed text-slate-800 align-top">
+                        <td className="py-1 px-2 report-text-cell text-slate-800 align-top">
                           {ch.updateText || '—'}
                         </td>
-                        <td className="py-1.5 px-2 whitespace-pre-wrap break-words leading-relaxed font-extrabold text-[#012E5E] align-top">
+                        <td className="py-1 px-2 report-text-cell font-extrabold text-[#012E5E] align-top">
                           {ch.recommendationText || '—'}
                         </td>
                       </tr>
@@ -2235,16 +2416,16 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               '12. الإعداد والمراجعة والاعتماد الرسمي',
               'Preparation, Review & Official Approval'
             )}
-            <div className="p-2.5 space-y-2">
-              <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="p-2 space-y-1.5">
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
                 {/* Preparer Card */}
                 <div className="rounded-xl border-2 border-[#C99E4A]/70 bg-gradient-to-b from-[#F4F8FC] to-white overflow-hidden shadow-xs">
-                  <div className="bg-gradient-to-l from-[#012E5E] to-[#0C4176] text-white px-3 py-1.5 border-b-2 border-[#C99E4A] flex items-center justify-between">
-                    <span className="font-extrabold text-[11px] text-[#DFC076]">
+                  <div className="bg-gradient-to-l from-[#012E5E] to-[#0C4176] text-white px-2.5 py-1 border-b-2 border-[#C99E4A] flex items-center justify-between gap-1">
+                    <span className="font-extrabold text-[10.5px] text-[#DFC076] truncate">
                       أولاً: إعداد التقرير · Report Preparation
                     </span>
                     <span
-                      className={`px-2 py-0.5 rounded-full text-[9.5px] font-bold ${
+                      className={`px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0 report-num-cell ${
                         report.preparerSignatureImage
                           ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
                           : 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
@@ -2253,23 +2434,23 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       {report.preparerSignatureImage ? 'موقّع إلكترونياً' : 'بانتظار التوقيع'}
                     </span>
                   </div>
-                  <div className="p-2.5 grid grid-cols-12 gap-2.5 items-center">
-                    <div className="col-span-7 space-y-0.5">
-                      <p className="text-[10px] text-slate-500 font-bold">الاسم الكامل:</p>
-                      <p className="text-sm font-black text-[#012E5E]">
+                  <div className="p-2 grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-7 space-y-0.5 min-w-0">
+                      <p className="text-[9.5px] text-slate-500 font-bold">الاسم الكامل:</p>
+                      <p className="text-xs font-black text-[#012E5E] truncate">
                         {report.preparerName || '—'}
                       </p>
-                      <p className="text-[10.5px] font-bold text-[#1769AA]">
+                      <p className="text-[10px] font-bold text-[#1769AA] truncate">
                         {report.preparerTitle || '—'}
                       </p>
-                      <p className="text-[10.5px] text-slate-600 pt-0.5">
+                      <p className="text-[10px] text-slate-600 pt-0.5">
                         تاريخ الإعداد:{' '}
                         <span dir="ltr" className="font-mono font-bold text-[#012E5E] tabular-nums">
                           {formatDateWestern(report.preparedAt, 'قيد الإعداد')}
                         </span>
                       </p>
                       {report.preparerSignedAt && (
-                        <p className="text-[9.5px] text-slate-500">
+                        <p className="text-[9px] text-slate-500">
                           وقت التوقيع:{' '}
                           <span dir="ltr" className="font-mono tabular-nums">
                             {formatDateTimeWestern(report.preparerSignedAt)}
@@ -2278,19 +2459,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       )}
                     </div>
                     <div className="col-span-5">
-                      <div className="bg-white rounded-xl border border-[#C5D8EE] p-1.5 h-20 flex flex-col items-center justify-center text-center">
+                      <div className="bg-white rounded-xl border border-[#C5D8EE] p-1.5 h-16 flex flex-col items-center justify-center text-center">
                         {report.preparerSignatureImage ? (
                           <img
                             src={report.preparerSignatureImage}
                             alt={`توقيع ${report.preparerName || 'معد التقرير'}`}
-                            className="max-h-14 max-w-full object-contain"
+                            className="max-h-11 max-w-full object-contain"
                           />
                         ) : (
-                          <span className="text-[10px] text-slate-400 font-semibold">
+                          <span className="text-[9.5px] text-slate-400 font-semibold">
                             لا يوجد توقيع مرفوع بعد
                           </span>
                         )}
-                        <span className="text-[9px] font-bold text-slate-500 mt-0.5">
+                        <span className="text-[8.5px] font-bold text-slate-500 mt-0.5">
                           التوقيع الرسمي لمعد التقرير
                         </span>
                       </div>
@@ -2300,12 +2481,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                 {/* Approver Card */}
                 <div className="rounded-xl border-2 border-[#0C4176]/60 bg-gradient-to-b from-[#F4F8FC] to-white overflow-hidden shadow-xs">
-                  <div className="bg-gradient-to-l from-[#012E5E] to-[#0C4176] text-white px-3 py-1.5 border-b-2 border-[#C99E4A] flex items-center justify-between">
-                    <span className="font-extrabold text-[11px] text-[#DFC076]">
+                  <div className="bg-gradient-to-l from-[#012E5E] to-[#0C4176] text-white px-2.5 py-1 border-b-2 border-[#C99E4A] flex items-center justify-between gap-1">
+                    <span className="font-extrabold text-[10.5px] text-[#DFC076] truncate">
                       ثانياً: اعتماد التقرير · Executive Approval
                     </span>
                     <span
-                      className={`px-2 py-0.5 rounded-full text-[9.5px] font-bold ${
+                      className={`px-2 py-0.5 rounded-full text-[9px] font-bold shrink-0 report-num-cell ${
                         report.approverSignatureImage
                           ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
                           : 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
@@ -2314,23 +2495,23 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       {report.approverSignatureImage ? 'موقّع إلكترونياً' : 'بانتظار التوقيع'}
                     </span>
                   </div>
-                  <div className="p-2.5 grid grid-cols-12 gap-2.5 items-center">
-                    <div className="col-span-7 space-y-0.5">
-                      <p className="text-[10px] text-slate-500 font-bold">الاسم الكامل:</p>
-                      <p className="text-sm font-black text-[#012E5E]">
+                  <div className="p-2 grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-7 space-y-0.5 min-w-0">
+                      <p className="text-[9.5px] text-slate-500 font-bold">الاسم الكامل:</p>
+                      <p className="text-xs font-black text-[#012E5E] truncate">
                         {report.approverName || '—'}
                       </p>
-                      <p className="text-[10.5px] font-bold text-[#1769AA]">
+                      <p className="text-[10px] font-bold text-[#1769AA] truncate">
                         {report.approverTitle || '—'}
                       </p>
-                      <p className="text-[10.5px] text-slate-600 pt-0.5">
+                      <p className="text-[10px] text-slate-600 pt-0.5">
                         تاريخ الاعتماد:{' '}
                         <span dir="ltr" className="font-mono font-bold text-[#012E5E] tabular-nums">
                           {formatDateWestern(report.approvedAt, 'بانتظار الاعتماد')}
                         </span>
                       </p>
                       {report.approverSignedAt && (
-                        <p className="text-[9.5px] text-slate-500">
+                        <p className="text-[9px] text-slate-500">
                           وقت التوقيع:{' '}
                           <span dir="ltr" className="font-mono tabular-nums">
                             {formatDateTimeWestern(report.approverSignedAt)}
@@ -2339,19 +2520,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       )}
                     </div>
                     <div className="col-span-5">
-                      <div className="bg-white rounded-xl border border-[#C5D8EE] p-1.5 h-20 flex flex-col items-center justify-center text-center">
+                      <div className="bg-white rounded-xl border border-[#C5D8EE] p-1.5 h-16 flex flex-col items-center justify-center text-center">
                         {report.approverSignatureImage ? (
                           <img
                             src={report.approverSignatureImage}
                             alt={`توقيع ${report.approverName || 'معتمد التقرير'}`}
-                            className="max-h-14 max-w-full object-contain"
+                            className="max-h-11 max-w-full object-contain"
                           />
                         ) : (
-                          <span className="text-[10px] text-slate-400 font-semibold">
+                          <span className="text-[9.5px] text-slate-400 font-semibold">
                             بانتظار توقيع المعتمد
                           </span>
                         )}
-                        <span className="text-[9px] font-bold text-slate-500 mt-0.5">
+                        <span className="text-[8.5px] font-bold text-slate-500 mt-0.5">
                           التوقيع الرسمي لمعتمد التقرير
                         </span>
                       </div>
@@ -2362,15 +2543,15 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
               {/* Official Attestation / Status Banner */}
               {isApprovedOrArchived ? (
-                <div className="rounded-xl bg-emerald-50 border border-emerald-300 px-3.5 py-1.5 flex items-center justify-center gap-2 text-[11px] font-extrabold text-[#069B74]">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <div className="rounded-xl bg-emerald-50 border border-emerald-300 px-3 py-1 flex items-center justify-center gap-1.5 text-[10.5px] font-extrabold text-[#069B74]">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                   <span>
                     «هذا التقرير معتمد ومراجع وفقاً للسياسات والإجراءات المعمول بها في قسم إدارة المرافق»
                   </span>
                 </div>
               ) : (
-                <div className="rounded-xl bg-amber-50 border border-amber-300 px-3.5 py-1.5 flex items-center justify-center gap-2 text-[11px] font-extrabold text-[#92620A]">
-                  <AlertTriangle className="w-4 h-4 text-[#C99E4A] shrink-0" />
+                <div className="rounded-xl bg-amber-50 border border-amber-300 px-3 py-1 flex items-center justify-center gap-1.5 text-[10.5px] font-extrabold text-[#92620A]">
+                  <AlertTriangle className="w-3.5 h-3.5 text-[#C99E4A] shrink-0" />
                   <span>
                     حالة التقرير الحالية: ({STATUS_LABELS_AR[report.status]}) — يُعتمد التقرير رسمياً بعد استكمال التوقيعين الإلكترونيين لمعد التقرير ومعتمد التقرير
                   </span>
@@ -2384,9 +2565,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
   return (
     <div
+      ref={containerRef}
       className="official-report-pages-container space-y-6"
       data-total-pages={totalPages}
       data-pagination-ready={paginationReady ? 'true' : 'false'}
+      data-geometry-valid={geometryValid ? 'true' : 'false'}
       data-orientation={orientation}
     >
       {activePages.map((blocks, idx) => {
@@ -2411,7 +2594,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
           >
             {renderPageHeader(pageNum)}
 
-            <div className="official-page-body px-3.5 py-2.5 space-y-2.5 text-[#012E5E] flex-1">
+            <div
+              className={`official-page-body text-[#012E5E] flex-1 ${
+                isPortrait ? 'px-2.5 py-2 space-y-2' : 'px-3 py-1.5 space-y-1.5'
+              }`}
+            >
               {blocks.map((block, bIdx) =>
                 renderBlock(block, `p${pageNum}-b${bIdx}-${block.kind}`)
               )}

@@ -5,6 +5,7 @@ import {
   resolveApiUrl,
 } from '../api/client.ts';
 import { staticFallbackApi } from '../api/staticFallbackStore.ts';
+import { validateReportPagesGeometry } from '../components/OfficialReportLayout.tsx';
 import { computeReportMetrics, formatPct, getMonthNameAr } from '../utils/calculations.ts';
 
 async function verifyMagicHeader(blob: Blob, kind: 'pdf' | 'xlsx'): Promise<void> {
@@ -491,11 +492,25 @@ export async function prepareAndTriggerPrint(params: {
     });
   });
 
+  let validation = validateReportPagesGeometry(root, orientation);
+  if (!validation.valid) {
+    await waitForPaginationReady(root, 600);
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+    validation = validateReportPagesGeometry(root, orientation);
+    if (!validation.valid) {
+      console.warn('[SAAED Print Geometry Validator] Non-blocking layout warning:', validation.issues);
+    }
+  }
+
   const styleId = 'saaed-dynamic-print-page-style';
   document.getElementById(styleId)?.remove();
   const styleEl = document.createElement('style');
   styleEl.id = styleId;
-  styleEl.textContent = `@media print { @page { size: A4 ${orientation}; margin: 4mm; } }`;
+  styleEl.textContent = `@media print { @page { size: A4 ${orientation}; margin: 5mm; } }`;
   document.head.appendChild(styleEl);
 
   await new Promise<void>((resolve) => {

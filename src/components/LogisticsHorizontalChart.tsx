@@ -218,9 +218,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               onClick={() =>
                 !isPrint && setActiveKey((prev) => (prev === row.channelKey ? null : row.channelKey))
               }
-              className={`grid grid-cols-12 items-center gap-2 rounded-lg transition-colors ${
-                isPrint ? 'px-1.5 py-1' : 'px-2 py-1.5'
-              } ${
+              className={`grid grid-cols-12 items-center ${isPrint ? 'gap-1 px-1.5 py-1' : 'gap-2 px-2 py-1.5'} rounded-lg transition-colors ${
                 row.isTopChannel
                   ? 'bg-[#EAF2FA]/75 border border-[#C6A35E]/55'
                   : isHovered
@@ -229,9 +227,9 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               } focus:outline-none focus:ring-2 focus:ring-[#1769AA]/40 cursor-pointer`}
             >
               {/* 1. Channel Name & Rank (Right side in RTL) */}
-              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center gap-1.5 min-w-0`}>
+              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center gap-1 min-w-0`}>
                 <span
-                  className={`w-5 h-5 rounded-md text-[10px] font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
+                  className={`${isPrint ? 'w-4 h-4 text-[9px]' : 'w-5 h-5 text-[10px]'} rounded-md font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
                     row.isTopChannel
                       ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]'
                       : 'bg-[#EAF2FA] text-[#0C2544]'
@@ -242,7 +240,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
                 </span>
                 <span
                   className={`${
-                    isPrint ? 'text-[10.5px]' : 'text-xs'
+                    isPrint ? 'text-[9.5px]' : 'text-xs'
                   } font-extrabold text-[#0C2544] truncate`}
                   title={row.nameAr}
                 >
@@ -257,10 +255,10 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               </div>
 
               {/* 2. Horizontal Bar Track (Middle) */}
-              <div className={`${isPrint ? 'col-span-6' : 'col-span-4 sm:col-span-6'} flex items-center`}>
+              <div className={`${isPrint ? 'col-span-5' : 'col-span-4 sm:col-span-6'} flex items-center`}>
                 <div
                   className={`w-full ${
-                    isPrint ? 'h-3.5' : 'h-5'
+                    isPrint ? 'h-3' : 'h-5'
                   } rounded-md bg-[#EAF2FA] border border-[#D5E4F4] overflow-hidden p-0.5 flex items-center`}
                 >
                   {row.requestCount > 0 ? (
@@ -282,23 +280,23 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               </div>
 
               {/* 3. Numeric Value & Share Percentage (Left side in RTL) */}
-              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center justify-end gap-1.5 shrink-0`}>
+              <div className={`${isPrint ? 'col-span-4' : 'col-span-4 sm:col-span-3'} flex items-center justify-end gap-1 shrink-0`}>
                 <span
                   className={`${
-                    isPrint ? 'text-[10.5px]' : 'text-xs'
+                    isPrint ? 'text-[9.5px]' : 'text-xs'
                   } font-extrabold text-[#0C2544] tabular-nums whitespace-nowrap`}
                   dir="ltr"
                 >
                   {formatNumber(row.requestCount)}
                 </span>
-                <span className={`text-[10px] font-semibold text-slate-500 ${isPrint ? 'inline' : 'hidden sm:inline'}`}>
+                <span className={`${isPrint ? 'text-[9px] inline' : 'text-[10px] hidden sm:inline'} font-semibold text-slate-500 whitespace-nowrap`}>
                   طلباً
                 </span>
-                <span className="text-slate-300 text-[10px]" aria-hidden="true">
+                <span className="text-slate-300 text-[9px]" aria-hidden="true">
                   —
                 </span>
                 <span
-                  className={`min-w-[46px] text-center px-1.5 py-0.5 rounded text-[10.5px] font-extrabold tabular-nums ${
+                  className={`${isPrint ? 'min-w-[40px] px-1 text-[9.5px]' : 'min-w-[46px] px-1.5 text-[10.5px]'} text-center py-0.5 rounded font-extrabold tabular-nums whitespace-nowrap ${
                     row.isTopChannel
                       ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]/60'
                       : row.requestCount > 0

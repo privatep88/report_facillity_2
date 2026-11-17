@@ -632,21 +632,103 @@
   }
 }
 
+/* Desktop Header & Footer enforcement inside OfficialReportLayout regardless of mobile viewport */
+.official-report-page .saaed-executive-header {
+  aspect-ratio: 1199 / 133;
+}
+
+.official-report-page--portrait .saaed-executive-footer {
+  grid-template-columns: 21% 45% 34%;
+  min-height: 58px;
+  max-height: 64px;
+  padding: 4px 12px 5px 0;
+}
+
+.official-report-page--portrait .saaed-executive-footer__visual {
+  max-width: 21.5%;
+}
+
+.official-report-page--portrait .saaed-executive-footer__arabic {
+  font-size: 11.5px;
+}
+
+.official-report-page--portrait .saaed-executive-footer__english {
+  font-size: 9px;
+}
+
+.official-report-page--portrait .saaed-executive-footer__pen {
+  width: 13px;
+  height: 13px;
+}
+
+.official-report-page--landscape .saaed-executive-footer {
+  min-height: 62px;
+  max-height: 68px;
+  padding: 5px 16px 6px 0;
+}
+
+.official-report-page--landscape .saaed-executive-footer__arabic {
+  font-size: 13px;
+}
+
+.official-report-page--landscape .saaed-executive-footer__english {
+  font-size: 10px;
+}
+
+/* Compact Section 2 service table inside A4 sheets (identical across preview and print) */
+.official-report-page .requests-by-service-table thead th {
+  height: 24px !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+}
+
+.official-report-page .requests-by-service-table tbody tr {
+  height: 22px !important;
+  min-height: 22px !important;
+  max-height: 24px !important;
+}
+
+.official-report-page .requests-by-service-table tbody td {
+  padding: 1px 6px !important;
+  font-size: 10px !important;
+}
+
+.official-report-page .requests-by-service-table tfoot tr {
+  height: 25px !important;
+  min-height: 25px !important;
+}
+
+/* Clean RTL wrapping utilities for descriptive vs numeric report cells */
+.report-text-cell {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  text-overflow: clip;
+  height: auto;
+  line-height: 1.42;
+}
+
+.report-num-cell {
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
 /* Off-screen print host mounted only during direct PDF export when preview modal is closed */
 .saaed-print-only-host {
   position: fixed;
   left: -12000px;
   top: 0;
-  width: 1280px;
+  width: 1200px;
   visibility: hidden;
   pointer-events: none;
   z-index: -1;
 }
 
-/* Print Styles for Official Executive Report Preview & Isolated A4 Printing */
+/* Print Styles for Official Executive Report Preview & Isolated Native A4 Printing */
 @media print {
   @page {
-    margin: 4mm;
+    margin: 5mm;
   }
 
   html,
@@ -718,7 +800,7 @@
     border-radius: 0 !important;
   }
 
-  /* Strict 1:1 WYSIWYG A4 sheets for OfficialReportLayout */
+  /* Strict Native 1:1 WYSIWYG A4 sheets (zero CSS zoom, immune to Windows Print-to-PDF scaling quirks) */
   .official-report-pages-container {
     display: block !important;
     width: auto !important;
@@ -738,7 +820,7 @@
     box-shadow: none !important;
     border: 0 !important;
     border-radius: 0 !important;
-    margin: 0 !important;
+    margin: 0 auto !important;
     break-inside: avoid-page !important;
     page-break-inside: avoid !important;
     break-after: page !important;
@@ -746,19 +828,17 @@
   }
 
   .official-report-page--landscape {
-    width: 1220px !important;
-    max-width: 1220px !important;
-    min-height: 854px !important;
-    height: 854px !important;
-    zoom: 0.888;
+    width: 1076px !important;
+    max-width: 1076px !important;
+    min-height: 740px !important;
+    height: 740px !important;
   }
 
   .official-report-page--portrait {
-    width: 920px !important;
-    max-width: 920px !important;
-    min-height: 1310px !important;
-    height: 1310px !important;
-    zoom: 0.825;
+    width: 748px !important;
+    max-width: 748px !important;
+    min-height: 1068px !important;
+    height: 1068px !important;
   }
 
   .official-report-page:last-child {
@@ -785,9 +865,18 @@
     break-inside: avoid !important;
     page-break-inside: avoid !important;
     width: 100% !important;
-    min-height: 68px !important;
-    max-height: 78px !important;
-    padding: 6px 16px 8px 0 !important;
+  }
+
+  .official-report-page--portrait .saaed-executive-footer {
+    min-height: 58px !important;
+    max-height: 64px !important;
+    padding: 4px 12px 5px 0 !important;
+  }
+
+  .official-report-page--landscape .saaed-executive-footer {
+    min-height: 62px !important;
+    max-height: 68px !important;
+    padding: 5px 16px 6px 0 !important;
   }
 
   .print-section {
