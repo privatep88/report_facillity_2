@@ -1036,12 +1036,11 @@ export const PostApprovalEditConfirmModal: React.FC<{
         <div className="p-3.5 rounded-xl bg-amber-50 border border-[#D5AD5D]/70 text-xs text-[#082D56] flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-[#9A7422] shrink-0 mt-0.5" />
           <p className="leading-relaxed font-semibold">
-            أنت على وشك تعديل تقرير معتمد. سيتم الاحتفاظ بالنسخة المعتمدة الحالية كما هي في سجل الإصدارات
-            والأرشيف، وسيتم إنشاء إصدار جديد برقم{' '}
+            هذا التقرير سبق اعتماده رسمياً. سيؤدي فتحه للتحرير إلى إنشاء إصدار تعديل جديد (
             <span dir="ltr" className="font-mono font-extrabold text-[#9A7422]">
               v{nextVersion}
-            </span>{' '}
-            للمراجعة والاعتماد.
+            </span>
+            ) مع الاحتفاظ بالنسخة المعتمدة السابقة وسجل التوقيعات والتدقيق.
           </p>
         </div>
 

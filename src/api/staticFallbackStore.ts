@@ -405,17 +405,23 @@ function createInitialStoreState(): StaticStoreState {
   };
 }
 
+let memoryStore: StaticStoreState | null = null;
+
 function loadStore(): StaticStoreState {
   try {
-    const raw = window.localStorage.getItem(STATIC_STORE_KEY);
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STATIC_STORE_KEY) : null;
     if (raw) {
       const parsed = JSON.parse(raw) as StaticStoreState;
       if (parsed && parsed.reports && Object.keys(parsed.reports).length > 0) {
+        memoryStore = parsed;
         return parsed;
       }
     }
   } catch {
     // ignore storage errors
+  }
+  if (memoryStore && memoryStore.reports && Object.keys(memoryStore.reports).length > 0) {
+    return memoryStore;
   }
   const initial = createInitialStoreState();
   saveStore(initial);
@@ -423,8 +429,11 @@ function loadStore(): StaticStoreState {
 }
 
 function saveStore(state: StaticStoreState): void {
+  memoryStore = state;
   try {
-    window.localStorage.setItem(STATIC_STORE_KEY, JSON.stringify(state));
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STATIC_STORE_KEY, JSON.stringify(state));
+    }
   } catch {
     // ignore quota errors
   }

@@ -25,11 +25,8 @@ export function isAuthorizedPostApprovalOwner(
 ): boolean {
   if (!user || !user.isActive || !report) return false;
   if (user.role === USER_ROLES.ADMIN) return true;
-  if (user.role === USER_ROLES.PREPARER) {
-    const ownerUid = typeof report.preparerId === 'string' ? report.preparerId.trim() : '';
-    return ownerUid.length > 0 && ownerUid === user.id;
-  }
-  return false;
+  const ownerUid = typeof report.preparerId === 'string' ? report.preparerId.trim() : '';
+  return ownerUid.length > 0 && ownerUid === user.id;
 }
 
 /**

@@ -737,6 +737,14 @@ export default function App() {
 
     // Smart Missing Data & Dual Signature Gate BEFORE opening Executive Approval Confirmation
     if (!validation.isComplete) {
+      notifyWarning(
+        'لا يمكن إرسال الإصدار للاعتماد لوجود بيانات مطلوبة غير مكتملة',
+        `يرجى استكمال الحقول الإلزامية في التقرير (${activeReport.reportNumber}) قبل المتابعة.`,
+        {
+          context: 'validation',
+          reportNumber: activeReport.reportNumber,
+        }
+      );
       void missingDataDialog({
         reportNumber: activeReport.reportNumber,
         month: activeReport.month,
@@ -753,13 +761,21 @@ export default function App() {
     });
 
     if (!dualEval.hasValidPreparerSignature || !dualEval.hasValidApproverSignature) {
+      notifyWarning(
+        'يتطلب الاعتماد النهائي توقيع معد التقرير ومعتمد التقرير',
+        'يرجى حفظ التوقيع الإلكتروني الجديد لمعد التقرير ومعتمد التقرير لإتمام الاعتماد.',
+        {
+          context: 'approval',
+          reportNumber: activeReport.reportNumber,
+        }
+      );
       void alertDialog({
         type: 'warning',
         iconType: 'signature',
         title: 'تعذر اعتماد التقرير',
         titleEn: 'Report Approval Restricted',
         message:
-          'لا يمكن اعتماد التقرير نهائياً قبل استكمال توقيع معد التقرير وتوقيع معتمد التقرير. يرجى إضافة التوقيعات المطلوبة للمتابعة.',
+          'يتطلب الاعتماد النهائي توقيع معد التقرير ومعتمد التقرير. يرجى إضافة التوقيعات المطلوبة للمتابعة.',
         context: 'approval',
         signatureChecklist: [
           {
@@ -877,6 +893,14 @@ export default function App() {
         savingTarget: savingSignatureTarget,
       });
       if (!validation.isComplete) {
+        notifyWarning(
+          'لا يمكن إرسال الإصدار للاعتماد لوجود بيانات مطلوبة غير مكتملة',
+          `يرجى استكمال الحقول الإلزامية في التقرير (${activeReport.reportNumber}) قبل المتابعة.`,
+          {
+            context: 'validation',
+            reportNumber: activeReport.reportNumber,
+          }
+        );
         void missingDataDialog({
           reportNumber: activeReport.reportNumber,
           month: activeReport.month,
