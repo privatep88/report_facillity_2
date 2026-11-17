@@ -29,7 +29,13 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies (deterministic lockfile install)
-        run: npm ci
+        run: |
+          node -v
+          npm -v
+          npm ci
+
+      - name: Run TypeScript type check
+        run: npm run lint
 
       - name: Build production bundle for GitHub Pages (/report_facillity_2/)
         env:
