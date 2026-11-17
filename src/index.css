@@ -632,9 +632,145 @@
   }
 }
 
-/* Desktop Header & Footer enforcement inside OfficialReportLayout regardless of mobile viewport */
-.official-report-page .saaed-executive-header {
+/* Desktop Header & Footer enforcement inside OfficialReportLayout & Direct PDF host regardless of mobile viewport */
+.official-report-page .saaed-executive-header,
+.saaed-direct-pdf-host .saaed-executive-header {
   aspect-ratio: 1199 / 133;
+}
+
+.official-report-page .saaed-executive-header .header-ribbons-svg,
+.official-report-page .saaed-executive-header .header-bottom-edge,
+.saaed-direct-pdf-host .saaed-executive-header .header-ribbons-svg,
+.saaed-direct-pdf-host .saaed-executive-header .header-bottom-edge {
+  display: block;
+}
+
+.official-report-page .saaed-executive-header .header-backdrop-img,
+.saaed-direct-pdf-host .saaed-executive-header .header-backdrop-img {
+  opacity: 1;
+}
+
+.official-report-page .saaed-executive-header .header-foreground,
+.saaed-direct-pdf-host .saaed-executive-header .header-foreground {
+  display: block;
+}
+
+.official-report-page .saaed-executive-header .header-content,
+.saaed-direct-pdf-host .saaed-executive-header .header-content {
+  position: absolute;
+  left: 33.1%;
+  right: 23.1%;
+  top: 0;
+  bottom: 0;
+  padding: 0 0 0.25cqi;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1.25cqi;
+}
+
+.official-report-page .saaed-executive-header .header-emblem,
+.saaed-direct-pdf-host .saaed-executive-header .header-emblem {
+  width: 6.0cqi;
+  height: 5.35cqi;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 0.72cqi;
+}
+
+.official-report-page .saaed-executive-header .header-title-group h1,
+.saaed-direct-pdf-host .saaed-executive-header .header-title-group h1 {
+  font-size: 2.38cqi;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.official-report-page .saaed-executive-header .header-title-group p,
+.saaed-direct-pdf-host .saaed-executive-header .header-title-group p {
+  font-size: 1.38cqi;
+  margin-top: 0.34cqi;
+  white-space: nowrap;
+}
+
+.official-report-page .saaed-executive-header .header-department,
+.saaed-direct-pdf-host .saaed-executive-header .header-department {
+  gap: 0.9cqi;
+  font-size: 1.02cqi;
+  white-space: nowrap;
+}
+
+.official-report-page .saaed-executive-header .header-brand,
+.saaed-direct-pdf-host .saaed-executive-header .header-brand {
+  position: absolute;
+  left: 80.3%;
+  right: 0.6%;
+  top: 0;
+  bottom: 0;
+  background: transparent;
+  border-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0;
+  padding: 0.25cqi 0.5cqi 0.55cqi;
+}
+
+.official-report-page .saaed-executive-header .header-brand-logo,
+.saaed-direct-pdf-host .saaed-executive-header .header-brand-logo {
+  width: 15.2cqi;
+  max-width: 100%;
+  height: auto;
+  max-height: 5.55cqi;
+  object-fit: contain;
+  display: block;
+  margin-bottom: 0.22cqi;
+}
+
+.official-report-page .saaed-executive-header .header-brand-ar,
+.saaed-direct-pdf-host .saaed-executive-header .header-brand-ar {
+  font-size: 1.18cqi;
+  line-height: 1.24;
+  white-space: nowrap;
+}
+
+.official-report-page .saaed-executive-header .header-brand-en,
+.saaed-direct-pdf-host .saaed-executive-header .header-brand-en {
+  font-size: 0.95cqi;
+  line-height: 1.22;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.official-report-page .saaed-executive-footer,
+.saaed-direct-pdf-host .saaed-executive-footer {
+  display: grid;
+  flex-direction: initial;
+  padding: 5px 16px 6px 0;
+}
+
+.official-report-page .saaed-executive-footer__left-slot,
+.official-report-page .saaed-executive-footer__divider,
+.saaed-direct-pdf-host .saaed-executive-footer__left-slot,
+.saaed-direct-pdf-host .saaed-executive-footer__divider {
+  display: block;
+}
+
+.official-report-page .saaed-executive-footer__right,
+.saaed-direct-pdf-host .saaed-executive-footer__right {
+  width: auto;
+  padding-top: 2px;
+  border-top: 0;
+  justify-content: flex-end;
+}
+
+.official-report-page .saaed-executive-footer__visual,
+.saaed-direct-pdf-host .saaed-executive-footer__visual {
+  opacity: 1;
+  width: auto;
+  min-width: 0;
 }
 
 .official-report-page--portrait .saaed-executive-footer {
@@ -714,7 +850,7 @@
   word-break: normal !important;
 }
 
-/* Off-screen print host mounted only during direct PDF export when preview modal is closed */
+/* Off-screen print host for browser print fallback only */
 .saaed-print-only-host {
   position: fixed;
   left: -12000px;
@@ -723,6 +859,29 @@
   visibility: hidden;
   pointer-events: none;
   z-index: -1;
+}
+
+/* Isolated off-screen DOM host for Direct Client-Side PDF Export (must stay visibility:visible for SVG foreignObject rasterization) */
+.saaed-direct-pdf-host {
+  position: fixed;
+  left: -18000px;
+  top: 0;
+  width: 1200px;
+  visibility: visible;
+  pointer-events: none;
+  z-index: -9999;
+  background: #ffffff;
+}
+
+.saaed-direct-pdf-host .official-report-pages-container > * + * {
+  margin-top: 0 !important;
+}
+
+.saaed-direct-pdf-host .official-report-page {
+  box-shadow: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
 }
 
 /* Print Styles for Official Executive Report Preview & Isolated Native A4 Printing */

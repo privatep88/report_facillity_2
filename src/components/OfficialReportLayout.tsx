@@ -723,7 +723,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
               {report.reportNumber}
             </span>
           </span>
-          <span className="font-extrabold text-[#DFC076]">
+          <span className="font-extrabold text-[#DFC076] whitespace-nowrap shrink-0">
             الصفحة <span dir="ltr" className="tabular-nums">{formatNumber(pageNumber)}</span> من{' '}
             <span dir="ltr" className="tabular-nums">{formatNumber(totalPages)}</span>
           </span>
@@ -732,17 +732,35 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
     </div>
   );
 
-  const renderRibbonHeader = (titleAr: string, titleEn: string) => (
-    <div className="bg-gradient-to-l from-[#012E5E] via-[#083A72] to-[#0C4176] border-b-2 border-[#C99E4A] px-3 py-1 flex items-center justify-between text-white rounded-t-xl">
-      <div className="flex items-center gap-1.5">
-        <span className="w-1.5 h-3 rounded-full bg-[#C99E4A]" />
-        <h2 className="text-[12px] font-extrabold tracking-tight">{titleAr}</h2>
+  const renderRibbonHeader = (titleAr: string, titleEn: string, compact = false) => {
+    const useCompact = compact && isPortrait;
+    return (
+      <div
+        className={`bg-gradient-to-l from-[#012E5E] via-[#083A72] to-[#0C4176] border-b-2 border-[#C99E4A] ${
+          useCompact ? 'px-2 py-1 gap-1.5' : 'px-3 py-1 gap-2'
+        } flex items-center justify-between text-white rounded-t-xl`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 shrink-0">
+          <span className="w-1.5 h-3 rounded-full bg-[#C99E4A] shrink-0" />
+          <h2
+            className={`${
+              useCompact ? 'text-[9.5px]' : 'text-[11.5px]'
+            } font-extrabold tracking-tight whitespace-nowrap`}
+          >
+            {titleAr}
+          </h2>
+        </div>
+        <span
+          className={`${
+            useCompact ? 'text-[6.8px] tracking-normal' : 'text-[8.5px] tracking-wide'
+          } font-semibold text-[#DFC076] uppercase whitespace-nowrap shrink-0`}
+          dir="ltr"
+        >
+          {titleEn}
+        </span>
       </div>
-      <span className="text-[9.5px] font-semibold text-[#DFC076] uppercase tracking-wider" dir="ltr">
-        {titleEn}
-      </span>
-    </div>
-  );
+    );
+  };
 
   const renderBlock = (block: BlockSpec, key: string) => {
     switch (block.kind) {
@@ -756,7 +774,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 <div className="col-span-9 grid grid-cols-4 gap-2 items-stretch">
                   {/* Card 1: Total Requests */}
                   <div className="rounded-xl border border-[#B8CEE8] bg-gradient-to-b from-[#F4F8FD] via-[#EBF2FC] to-[#DFEAFA] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#D8E8FA] shrink-0`}>
+                    <div className={`relative ${isPortrait ? 'h-[36px]' : 'h-[40px]'} w-full overflow-hidden bg-[#D8E8FA] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.totalRequests.src}
                         alt={EXECUTIVE_KPI_IMAGES.totalRequests.altAr}
@@ -769,11 +787,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       />
                       <div
                         aria-hidden="true"
-                        className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#EBF2FC] via-[#EBF2FC]/80 to-transparent"
+                        className="absolute inset-x-0 bottom-0 h-3.5 bg-gradient-to-t from-[#EBF2FC] via-[#EBF2FC]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                    <div className="px-1.5 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#B8CEE8] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
                         <ClipboardList className="w-3 h-3" />
                       </div>
                       <span
@@ -783,8 +801,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         {formatNumber(metrics.totalReceived)}
                       </span>
                       <div className="mt-0.5">
-                        <p className="text-[10px] font-extrabold text-[#012E5E]">إجمالي الطلبات</p>
-                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
+                        <p className="text-[10px] font-extrabold text-[#012E5E] leading-snug">إجمالي الطلبات</p>
+                        <p className="text-[7.8px] font-semibold text-slate-600 leading-[1.35] whitespace-nowrap" dir="ltr">
                           Total Requests
                         </p>
                       </div>
@@ -793,7 +811,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 2: Top Service */}
                   <div className="rounded-xl border border-[#E2C88B] bg-gradient-to-b from-[#FDF9EE] via-[#F9F0DA] to-[#F3E5C2] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#F3E5C2] shrink-0`}>
+                    <div className={`relative ${isPortrait ? 'h-[36px]' : 'h-[40px]'} w-full overflow-hidden bg-[#F3E5C2] shrink-0`}>
                       <img
                         src={topServiceImg.src}
                         alt={topServiceImg.altAr}
@@ -806,19 +824,19 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       />
                       <div
                         aria-hidden="true"
-                        className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#F9F0DA] via-[#F9F0DA]/80 to-transparent"
+                        className="absolute inset-x-0 bottom-0 h-3.5 bg-gradient-to-t from-[#F9F0DA] via-[#F9F0DA]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                    <div className="px-1.5 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#E2C88B] text-[#B8862D] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
                         <Award className="w-3 h-3" />
                       </div>
-                      <p className="text-[10.5px] font-black text-[#012E5E] leading-tight line-clamp-2 min-h-[18px] flex items-center justify-center">
+                      <p className="text-[10.5px] font-black text-[#012E5E] leading-tight line-clamp-2 min-h-[16px] flex items-center justify-center">
                         {metrics.topService ? metrics.topService.nameAr : '0'}
                       </p>
                       <div className="mt-0.5">
-                        <p className="text-[10px] font-extrabold text-[#012E5E]">أعلى خدمة طلباً</p>
-                        <p className="text-[8.5px] font-medium text-slate-600">
+                        <p className="text-[10px] font-extrabold text-[#012E5E] leading-snug">أعلى خدمة طلباً</p>
+                        <p className="text-[7.8px] font-semibold text-slate-600 leading-[1.35] whitespace-nowrap">
                           {metrics.topService
                             ? `${formatNumber(metrics.topService.receivedCount)} طلب · Top Service`
                             : 'Top Service'}
@@ -829,7 +847,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 3: Total Services */}
                   <div className="rounded-xl border border-[#A5C8EB] bg-gradient-to-b from-[#F0F7FE] via-[#E4F0FC] to-[#D5E7FA] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#D5E7FA] shrink-0`}>
+                    <div className={`relative ${isPortrait ? 'h-[36px]' : 'h-[40px]'} w-full overflow-hidden bg-[#D5E7FA] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.totalServices.src}
                         alt={EXECUTIVE_KPI_IMAGES.totalServices.altAr}
@@ -842,11 +860,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       />
                       <div
                         aria-hidden="true"
-                        className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#E4F0FC] via-[#E4F0FC]/80 to-transparent"
+                        className="absolute inset-x-0 bottom-0 h-3.5 bg-gradient-to-t from-[#E4F0FC] via-[#E4F0FC]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                    <div className="px-1.5 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#A5C8EB] text-[#1769AA] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
                         <Layers className="w-3 h-3" />
                       </div>
                       <span
@@ -856,8 +874,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         {formatNumber(metrics.activeServicesCount)}
                       </span>
                       <div className="mt-0.5">
-                        <p className="text-[10px] font-extrabold text-[#012E5E]">إجمالي الخدمات</p>
-                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
+                        <p className="text-[10px] font-extrabold text-[#012E5E] leading-snug">إجمالي الخدمات</p>
+                        <p className="text-[7.8px] font-semibold text-slate-600 leading-[1.35] whitespace-nowrap" dir="ltr">
                           Total Services
                         </p>
                       </div>
@@ -866,7 +884,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
                   {/* Card 4: Monthly Completion Rate */}
                   <div className="rounded-xl border border-[#9CD9C5] bg-gradient-to-b from-[#EFFBF6] via-[#E1F6ED] to-[#CEEFE1] overflow-hidden shadow-xs flex flex-col justify-between text-center">
-                    <div className={`relative ${isPortrait ? 'h-[46px]' : 'h-[50px]'} w-full overflow-hidden bg-[#CEEFE1] shrink-0`}>
+                    <div className={`relative ${isPortrait ? 'h-[36px]' : 'h-[40px]'} w-full overflow-hidden bg-[#CEEFE1] shrink-0`}>
                       <img
                         src={EXECUTIVE_KPI_IMAGES.monthlyCompletion.src}
                         alt={EXECUTIVE_KPI_IMAGES.monthlyCompletion.altAr}
@@ -879,11 +897,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       />
                       <div
                         aria-hidden="true"
-                        className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-[#E1F6ED] via-[#E1F6ED]/80 to-transparent"
+                        className="absolute inset-x-0 bottom-0 h-3.5 bg-gradient-to-t from-[#E1F6ED] via-[#E1F6ED]/80 to-transparent"
                       />
                     </div>
-                    <div className="px-1.5 pb-1.5 pt-0 flex-1 flex flex-col items-center justify-between">
-                      <div className="-mt-3.5 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
+                    <div className="px-1.5 pb-2 pt-0 flex-1 flex flex-col items-center justify-between">
+                      <div className="-mt-3 relative z-10 w-6 h-6 rounded-lg bg-white/95 border border-[#9CD9C5] text-[#069B74] flex items-center justify-center mb-0.5 shadow-xs shrink-0">
                         <Target className="w-3 h-3" />
                       </div>
                       <span
@@ -893,8 +911,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         {formatPct(metrics.overallCompletionPct, '0.0%')}
                       </span>
                       <div className="mt-0.5">
-                        <p className="text-[10px] font-extrabold text-[#012E5E]">نسبة الإنجاز الشهرية</p>
-                        <p className="text-[8.5px] font-medium text-slate-600" dir="ltr">
+                        <p className="text-[10px] font-extrabold text-[#012E5E] leading-snug">نسبة الإنجاز الشهرية</p>
+                        <p className="text-[7.5px] font-semibold text-slate-600 leading-[1.35] whitespace-nowrap" dir="ltr">
                           Monthly Completion Rate
                         </p>
                       </div>
@@ -1202,17 +1220,17 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
               {/* Middle Column (5 cols): Requests by Service Table */}
               <div className="col-span-5 rounded-xl border border-[#C5D8EE] bg-white overflow-hidden flex flex-col">
-                <div className="bg-[#012E5E] text-white px-2 py-1 text-[10px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                  <span>الطلبات حسب الخدمة · Requests by Service</span>
-                  <span className="text-[9px] text-[#DFC076]" dir="ltr">
+                <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'} font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]`}>
+                  <span className="whitespace-nowrap">الطلبات حسب الخدمة · Requests by Service</span>
+                  <span className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} text-[#DFC076] whitespace-nowrap shrink-0`} dir="ltr">
                     {formatNumber(sortedRequestsByService.length)} Services
                   </span>
                 </div>
                 <table className="requests-by-service-table w-full text-[10px] border-collapse table-fixed">
                   <colgroup>
-                    <col style={{ width: '58%' }} />
-                    <col style={{ width: '22%' }} />
-                    <col style={{ width: '20%' }} />
+                    <col style={{ width: isPortrait ? '66%' : '62%' }} />
+                    <col style={{ width: isPortrait ? '17%' : '19%' }} />
+                    <col style={{ width: isPortrait ? '17%' : '19%' }} />
                   </colgroup>
                   <thead className="bg-[#DCE9F6] text-[#012E5E] border-b border-[#B8CDE4]">
                     <tr>
@@ -1230,24 +1248,36 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                         >
                           <td className="py-0.5 px-1.5 font-bold text-[#012E5E] align-middle">
-                            <div className="flex items-center gap-1 min-w-0">
+                            <div className="flex items-center gap-1 min-w-0 overflow-hidden">
                               <span
                                 className="w-2 h-2 rounded-full shrink-0"
                                 style={{ backgroundColor: vis.color }}
                               />
-                              <span className="truncate">{s.nameAr}</span>
+                              <span
+                                className={`leading-tight whitespace-nowrap truncate ${
+                                  isPortrait ? 'text-[9px]' : ''
+                                }`}
+                              >
+                                {s.nameAr}
+                              </span>
                             </div>
                           </td>
                           <td className="py-0.5 px-1 text-center align-middle">
                             <span
                               dir="ltr"
-                              className="inline-flex items-center justify-center min-w-[42px] px-1.5 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums text-[10px] report-num-cell"
+                              className={`inline-flex items-center justify-center ${
+                                isPortrait
+                                  ? 'min-w-[34px] px-1 text-[9.5px]'
+                                  : 'min-w-[42px] px-1.5 text-[10px]'
+                              } py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums report-num-cell`}
                             >
                               {formatNumber(s.receivedCount)}
                             </span>
                           </td>
                           <td
-                            className="py-0.5 px-1 text-center align-middle tabular-nums font-extrabold text-[#1769AA] report-num-cell"
+                            className={`py-0.5 px-1 text-center align-middle tabular-nums font-extrabold text-[#1769AA] report-num-cell ${
+                              isPortrait ? 'text-[9.5px]' : ''
+                            }`}
                             dir="ltr"
                           >
                             {formatPct(s.shareOfTotalPct, '0.0%')}
@@ -1275,9 +1305,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
               {/* Left Column (4 cols): Performance Distribution Donut Chart & Legend */}
               <div className="col-span-4 rounded-xl border border-[#C5D8EE] bg-white overflow-hidden flex flex-col justify-between">
-                <div className="bg-[#012E5E] text-white px-2 py-1 text-[10px] font-extrabold flex items-center justify-between border-b border-[#C99E4A]">
-                  <span>توزيع الأداء · Performance Distribution</span>
-                  <span className="text-[9px] text-[#DFC076]">التوزيع النسبي</span>
+                <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[8px]' : 'text-[9.5px]'} font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]`}>
+                  <span className="whitespace-nowrap">توزيع الأداء · Performance Distribution</span>
+                  <span className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} text-[#DFC076] whitespace-nowrap shrink-0`}>التوزيع النسبي</span>
                 </div>
                 <div className="p-1.5 flex-1 flex flex-col items-center justify-between">
                   {activeServicesForChart.length > 0 ? (
@@ -1590,7 +1620,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
             {/* Section 5: الطفايات وملاحظات المخاطر */}
             <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
-              {renderRibbonHeader('5. الطفايات وملاحظات المخاطر', 'Fire Safety & Hazard Notes')}
+              {renderRibbonHeader('5. الطفايات وملاحظات المخاطر', 'Fire Safety & Hazard Notes', true)}
               <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} grid grid-cols-2 flex-1`}>
                 {report.safety.map((s, idx) => {
                   const isFire = s.groupKey === 'fire_extinguishers' || idx === 0;
@@ -1986,7 +2016,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
             {/* SECTION 7: خدمات الصيانة (Sources Table + Donut Chart) */}
             <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
-              {renderRibbonHeader('7. خدمات الصيانة (مصادر الطلبات)', 'Maintenance Services Sources')}
+              {renderRibbonHeader('7. خدمات الصيانة (مصادر الطلبات)', 'Maintenance Services Sources', true)}
               <div className="p-2 space-y-1.5 flex-1 flex flex-col justify-between">
                 <table className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
                   <colgroup>
@@ -2450,9 +2480,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         </span>
                       </p>
                       {report.preparerSignedAt && (
-                        <p className="text-[9px] text-slate-500">
+                        <p className="text-[9px] font-medium text-slate-600 leading-normal">
                           وقت التوقيع:{' '}
-                          <span dir="ltr" className="font-mono tabular-nums">
+                          <span dir="ltr" className="font-mono font-semibold text-slate-700 tabular-nums">
                             {formatDateTimeWestern(report.preparerSignedAt)}
                           </span>
                         </p>
@@ -2511,9 +2541,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         </span>
                       </p>
                       {report.approverSignedAt && (
-                        <p className="text-[9px] text-slate-500">
+                        <p className="text-[9px] font-medium text-slate-600 leading-normal">
                           وقت التوقيع:{' '}
-                          <span dir="ltr" className="font-mono tabular-nums">
+                          <span dir="ltr" className="font-mono font-semibold text-slate-700 tabular-nums">
                             {formatDateTimeWestern(report.approverSignedAt)}
                           </span>
                         </p>

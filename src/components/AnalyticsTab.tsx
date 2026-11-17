@@ -190,6 +190,7 @@ export const AnalyticsTab: React.FC = () => {
       const { filename } = await exportAnalyticsPdf({
         filters: filterPayload,
         orientation,
+        data: bi,
       });
       notifySuccess(
         'تم تصدير تقرير التحليلات التنفيذية (PDF)',

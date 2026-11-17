@@ -1,4 +1,5 @@
 import {
+  api,
   getStoredToken,
   isStaticBackendUnavailable,
   markStaticBackendUnavailable,
@@ -7,6 +8,17 @@ import {
 import { staticFallbackApi } from '../api/staticFallbackStore.ts';
 import { validateReportPagesGeometry } from '../components/OfficialReportLayout.tsx';
 import { computeReportMetrics, formatPct, getMonthNameAr } from '../utils/calculations.ts';
+import {
+  computeAnalyticsEngine,
+  DEFAULT_ANALYTICS_FILTERS,
+  type AnalyticsEngineOutput,
+  type AnalyticsFilters,
+} from './AnalyticsEngineService.ts';
+import {
+  exportAnalyticsDirectPdf,
+  exportReportDirectPdf,
+  type DirectReportSnapshotData,
+} from './DirectReportPdfExportService.ts';
 
 async function verifyMagicHeader(blob: Blob, kind: 'pdf' | 'xlsx'): Promise<void> {
   if (!blob || blob.size < 100) {
@@ -37,7 +49,7 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   anchor.remove();
   window.setTimeout(() => {
     URL.revokeObjectURL(objectUrl);
-  }, 1500);
+  }, 30000);
 }
 
 function parseFilename(disposition: string | null, fallback: string): string {
@@ -54,6 +66,7 @@ function parseFilename(disposition: string | null, fallback: string): string {
 export interface ExportResult {
   filename: string;
   sizeBytes: number;
+  pageCount?: number;
   mode?: 'download' | 'print';
 }
 
@@ -195,76 +208,29 @@ async function generateBrowserAnalyticsExcelFallback(): Promise<ExportResult> {
   return { filename, sizeBytes: blob.size };
 }
 
+/**
+ * Direct One-Click WYSIWYG A4 PDF Export matching OfficialReportLayout 100%.
+ * Never opens print dialogs, preview modals, or new browser tabs.
+ */
 export async function exportReportPdf(params: {
   reportId: string;
   versionNumber?: number | null;
   orientation?: 'landscape' | 'portrait';
-  onPrintFallback?: (orientation: 'landscape' | 'portrait') => Promise<void>;
+  liveData?: DirectReportSnapshotData;
 }): Promise<ExportResult> {
-  const { reportId, versionNumber, orientation = 'landscape', onPrintFallback } = params;
-
-  const runFallbackPrint = async (): Promise<ExportResult> => {
-    if (onPrintFallback) {
-      await onPrintFallback(orientation);
-    } else {
-      await prepareAndTriggerPrint({ orientation });
-    }
-    return {
-      filename: `SAAED_FM_Report_${reportId}.pdf`,
-      sizeBytes: 1024,
-      mode: 'print',
-    };
+  const { reportId, versionNumber, orientation = 'landscape', liveData } = params;
+  const res = await exportReportDirectPdf({
+    reportId,
+    versionNumber,
+    orientation,
+    liveData,
+  });
+  return {
+    filename: res.filename,
+    sizeBytes: res.sizeBytes,
+    pageCount: res.pageCount,
+    mode: 'download',
   };
-
-  if (isStaticBackendUnavailable()) {
-    return runFallbackPrint();
-  }
-
-  const qs = new URLSearchParams();
-  if (versionNumber) qs.set('version', String(versionNumber));
-  if (orientation) qs.set('orientation', orientation);
-
-  const url = resolveApiUrl(
-    `/api/reports/${encodeURIComponent(reportId)}/export/pdf?${qs.toString()}`
-  );
-  const token = getStoredToken();
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      credentials: 'include',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-  } catch {
-    markStaticBackendUnavailable();
-    return runFallbackPrint();
-  }
-
-  const contentType = (res.headers.get('content-type') || '').toLowerCase();
-  if (res.status === 404 || contentType.includes('text/html')) {
-    markStaticBackendUnavailable();
-    return runFallbackPrint();
-  }
-
-  if (!res.ok) {
-    let errMsg = 'تعذر إنشاء ملف PDF الرسمي من الخادم';
-    try {
-      const data = (await res.json()) as { error?: string };
-      if (data.error) errMsg = data.error;
-    } catch {
-      // ignore non-json
-    }
-    throw new Error(errMsg);
-  }
-
-  const blob = await res.blob();
-  await verifyMagicHeader(blob, 'pdf');
-  const filename = parseFilename(
-    res.headers.get('Content-Disposition'),
-    `SAAED_FM_Report_${reportId}.pdf`
-  );
-  triggerBrowserDownload(blob, filename);
-  return { filename, sizeBytes: blob.size, mode: 'download' };
 }
 
 export async function exportReportExcel(params: {
@@ -321,58 +287,39 @@ export async function exportReportExcel(params: {
   return { filename, sizeBytes: blob.size };
 }
 
+/**
+ * Direct One-Click Executive Analytics A4 PDF Download without window.print().
+ */
 export async function exportAnalyticsPdf(params: {
   filters: Record<string, string>;
   orientation?: 'landscape' | 'portrait';
+  data?: AnalyticsEngineOutput;
 }): Promise<ExportResult> {
-  const { filters, orientation = 'landscape' } = params;
-
-  if (isStaticBackendUnavailable()) {
-    await prepareAndTriggerPrint({ orientation });
-    const stamp = new Date().toISOString().slice(0, 10);
-    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
-  }
-
-  const token = getStoredToken();
-  let res: Response;
-  try {
-    res = await fetch(resolveApiUrl('/api/analytics/export/pdf'), {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  const { filters, orientation = 'landscape', data } = params;
+  let resolvedData = data;
+  if (!resolvedData) {
+    const all = await api.getAllAnalytics();
+    resolvedData = computeAnalyticsEngine({
+      reports: all.reports,
+      sites: all.sites,
+      categories: all.categories,
+      thresholds: all.thresholds,
+      filters: {
+        ...DEFAULT_ANALYTICS_FILTERS,
+        ...(filters as Partial<AnalyticsFilters>),
       },
-      body: JSON.stringify({ filters, orientation }),
     });
-  } catch {
-    markStaticBackendUnavailable();
-    await prepareAndTriggerPrint({ orientation });
-    const stamp = new Date().toISOString().slice(0, 10);
-    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
   }
-
-  const contentType = (res.headers.get('content-type') || '').toLowerCase();
-  if (res.status === 404 || contentType.includes('text/html')) {
-    markStaticBackendUnavailable();
-    await prepareAndTriggerPrint({ orientation });
-    const stamp = new Date().toISOString().slice(0, 10);
-    return { filename: `SAAED_FM_Executive_Analytics_${stamp}.pdf`, sizeBytes: 1024 };
-  }
-
-  if (!res.ok) {
-    throw new Error('تعذر إنشاء ملف PDF للتحليلات التنفيذية');
-  }
-
-  const blob = await res.blob();
-  await verifyMagicHeader(blob, 'pdf');
-  const stamp = new Date().toISOString().slice(0, 10);
-  const filename = parseFilename(
-    res.headers.get('Content-Disposition'),
-    `SAAED_FM_Executive_Analytics_${stamp}.pdf`
-  );
-  triggerBrowserDownload(blob, filename);
-  return { filename, sizeBytes: blob.size };
+  const res = await exportAnalyticsDirectPdf({
+    data: resolvedData,
+    orientation,
+  });
+  return {
+    filename: res.filename,
+    sizeBytes: res.sizeBytes,
+    pageCount: res.pageCount,
+    mode: 'download',
+  };
 }
 
 export async function exportAnalyticsExcel(params: {

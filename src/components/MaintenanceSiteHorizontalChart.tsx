@@ -215,14 +215,14 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
               <span className="block text-[9px] font-bold text-slate-600 leading-none">
                 المقر الأعلى أعطالاً (حسب العدد المسجل)
               </span>
-              <div className="flex items-baseline gap-1.5 mt-0.5">
+              <div className="flex items-baseline gap-1.5 mt-0.5 whitespace-nowrap">
                 {topSite ? (
                   <>
-                    <span className={`${isPrint ? 'text-[11px]' : 'text-xs'} font-extrabold text-[#0C2544]`}>
+                    <span className={`${isPrint ? 'text-[10.5px]' : 'text-xs'} font-extrabold text-[#0C2544]`}>
                       {topSite.nameAr}
                     </span>
                     <span
-                      className="text-[10.5px] font-extrabold text-[#1769AA] tabular-nums"
+                      className="text-[10px] font-extrabold text-[#1769AA] tabular-nums"
                       dir="ltr"
                     >
                       ({formatNumber(topSite.faults)} — {formatPercentage(topSite.sharePct)})
