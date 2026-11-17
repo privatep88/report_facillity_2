@@ -145,16 +145,6 @@ export const AnalyticsPrintModal: React.FC<{
 
           <button
             type="button"
-            onClick={onExportExcel}
-            disabled={exportingExcel}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#069B74] hover:bg-[#058261] disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
-          >
-            {exportingExcel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-            <span>{exportingExcel ? 'جارٍ التصدير...' : 'تصدير Excel'}</span>
-          </button>
-
-          <button
-            type="button"
             onClick={onClose}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
           >

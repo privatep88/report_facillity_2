@@ -119,10 +119,10 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
     return (
       <div
         dir="rtl"
-        className={`relative rounded-lg border border-[#C5D8EE] bg-gradient-to-b from-white to-[#F7FAFE] px-2.5 py-1.5 select-none ${className}`}
+        className={`relative rounded-lg border border-[#C5D8EE] bg-gradient-to-b from-white to-[#F7FAFE] px-2.5 py-1.5 select-none flex flex-col justify-between ${className}`}
         style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-[#E3EDF7] pb-1 mb-1.5">
+        <div className="flex items-center justify-between gap-2 border-b border-[#E3EDF7] pb-1 mb-1.5 shrink-0">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="w-1.5 h-4 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
             <h4 className="text-[10px] font-extrabold text-[#0C2544] leading-tight">
@@ -139,7 +139,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
           </div>
         </div>
 
-        <div className="space-y-1">
+        <div className="flex-1 flex flex-col justify-between gap-1">
           {sortedRows.map((row) => (
             <div
               key={row.channelKey}
@@ -218,12 +218,12 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
   return (
     <div
       dir="rtl"
-      className={`relative rounded-xl border border-[#D5E3F2] bg-gradient-to-b from-white to-[#F7FAFE] p-3.5 shadow-2xs select-none ${className}`}
+      className={`relative rounded-xl border border-[#D5E3F2] bg-gradient-to-b from-white to-[#F7FAFE] p-3.5 shadow-2xs select-none flex flex-col justify-between ${className}`}
       style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
       onMouseLeave={() => setActiveKey(null)}
     >
       {/* Top Header & Total Logistics Requests Mini Card */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E3EDF7] pb-2.5 mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E3EDF7] pb-2.5 mb-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
           <div className="min-w-0">
@@ -293,7 +293,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
       )}
 
       {/* Horizontal Bar Rows */}
-      <div className="space-y-2">
+      <div className="flex-1 flex flex-col justify-between gap-2">
         {sortedRows.map((row) => {
           const isHovered = activeKey === row.channelKey;
           return (

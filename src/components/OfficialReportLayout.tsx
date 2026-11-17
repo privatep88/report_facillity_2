@@ -52,6 +52,17 @@ import { CorporateFooter } from './CorporateFooter.tsx';
 import { LogisticsHorizontalChart } from './LogisticsHorizontalChart.tsx';
 import { MaintenanceSiteHorizontalChart } from './MaintenanceSiteHorizontalChart.tsx';
 import { SaaedExecutiveHeader } from './SaaedExecutiveHeader.tsx';
+import {
+  A4_SHEET_DIMENSIONS,
+  buildAdaptivePagePlan,
+  filterExportableChallenges,
+  filterExportableTasks,
+  refineOverflowingPages,
+  type BlockSpec,
+  type PagePlan,
+} from '../services/AdaptiveReportPaginationEngine.ts';
+
+export { A4_SHEET_DIMENSIONS };
 
 export interface OfficialReportLayoutProps {
   report: MonthlyReportFull;
@@ -65,16 +76,6 @@ export interface OfficialReportLayoutProps {
 }
 
 export const OFFICIAL_REPORT_TOTAL_PAGES = 5;
-
-/**
- * Exact 1:1 A4 printable sheet dimensions inside @page { margin: 5mm; }:
- * - A4 Portrait (210mm × 297mm) - 10mm = 200mm × 287mm = 755.9 × 1084.7 CSS px -> 748 × 1068 px
- * - A4 Landscape (297mm × 210mm) - 10mm = 287mm × 200mm = 1084.7 × 755.9 CSS px -> 1076 × 740 px
- */
-export const A4_SHEET_DIMENSIONS = {
-  landscape: { width: 1076, height: 740 },
-  portrait: { width: 748, height: 1068 },
-} as const;
 
 export interface ReportGeometryIssue {
   pageNumber: number;
@@ -179,6 +180,59 @@ export function validateReportPagesGeometry(
         });
       }
     }
+    const body = pageEl.querySelector<HTMLElement>('.official-page-body');
+    if (body) {
+      const children = Array.from(body.children) as HTMLElement[];
+      if (children.length === 0) {
+        issues.push({
+          pageNumber,
+          metric: 'page.emptyBody',
+          actual: 0,
+          limit: 1,
+        });
+      }
+      if (pageRect.width > 0 && children.length > 0) {
+        if (header) {
+          const hRect = header.getBoundingClientRect();
+          const firstRect = children[0].getBoundingClientRect();
+          const overlap = (hRect.bottom - firstRect.top) / scale;
+          if (overlap > 2) {
+            issues.push({
+              pageNumber,
+              metric: 'header.overlapsFirstSection',
+              actual: Math.round(overlap),
+              limit: 2,
+            });
+          }
+        }
+        for (let c = 0; c < children.length - 1; c++) {
+          const curRect = children[c].getBoundingClientRect();
+          const nextRect = children[c + 1].getBoundingClientRect();
+          const overlap = (curRect.bottom - nextRect.top) / scale;
+          if (overlap > 2) {
+            issues.push({
+              pageNumber,
+              metric: `section[${c}].overlapsNextSection`,
+              actual: Math.round(overlap),
+              limit: 2,
+            });
+          }
+        }
+        if (footer) {
+          const fRect = footer.getBoundingClientRect();
+          const lastRect = children[children.length - 1].getBoundingClientRect();
+          const overlap = (lastRect.bottom - fRect.top) / scale;
+          if (overlap > 2) {
+            issues.push({
+              pageNumber,
+              metric: 'lastSection.overlapsFooter',
+              actual: Math.round(overlap),
+              limit: 2,
+            });
+          }
+        }
+      }
+    }
   });
 
   return {
@@ -186,253 +240,6 @@ export function validateReportPagesGeometry(
     totalPages: pages.length,
     issues,
   };
-}
-
-type BlockSpec =
-  | { kind: 'sec1_exec' }
-  | { kind: 'sec_ops' }
-  | { kind: 'sec2_perf' }
-  | { kind: 'sec3_summary'; start: number; end: number }
-  | { kind: 'sec4_5_contracts_safety' }
-  | { kind: 'sec6_matrix'; siteStart: number; siteEnd: number; includeSummaryRows: boolean }
-  | { kind: 'sec6_chart' }
-  | { kind: 'sec7_8_maint_logistics' }
-  | { kind: 'sec9_security' }
-  | { kind: 'sec10_tasks'; start: number; end: number }
-  | { kind: 'sec11_challenges'; start: number; end: number }
-  | { kind: 'sec12_signatures' };
-
-type PagePlan = BlockSpec[];
-
-function chunkRange(total: number, perPage: number): Array<[number, number]> {
-  if (total <= 0) return [[0, 0]];
-  const ranges: Array<[number, number]> = [];
-  for (let i = 0; i < total; i += perPage) {
-    ranges.push([i, Math.min(total, i + perPage)]);
-  }
-  return ranges;
-}
-
-function buildInitialPages(params: {
-  orientation: 'landscape' | 'portrait';
-  servicesCount: number;
-  sitesCount: number;
-  categoriesCount: number;
-  securityCount: number;
-  tasksCount: number;
-  challengesCount: number;
-}): PagePlan[] {
-  const {
-    orientation,
-    servicesCount,
-    sitesCount,
-    categoriesCount,
-    securityCount,
-    tasksCount,
-    challengesCount,
-  } = params;
-
-  if (orientation === 'portrait') {
-    const pages: PagePlan[] = [];
-    // Sheet 1: Executive Summary + Operations Strip + Performance Overview
-    pages.push([{ kind: 'sec1_exec' }, { kind: 'sec_ops' }, { kind: 'sec2_perf' }]);
-
-    // Sheet 2: Services Summary + Contracts & Safety
-    const svcChunks = chunkRange(servicesCount, 16);
-    if (svcChunks.length === 1) {
-      pages.push([
-        { kind: 'sec3_summary', start: svcChunks[0][0], end: svcChunks[0][1] },
-        { kind: 'sec4_5_contracts_safety' },
-      ]);
-    } else {
-      svcChunks.forEach(([start, end], idx) => {
-        const blocks: BlockSpec[] = [{ kind: 'sec3_summary', start, end }];
-        if (idx === svcChunks.length - 1 && end - start <= 10) {
-          blocks.push({ kind: 'sec4_5_contracts_safety' });
-        }
-        pages.push(blocks);
-      });
-      const lastBlock = pages[pages.length - 1];
-      if (!lastBlock.some((b) => b.kind === 'sec4_5_contracts_safety')) {
-        pages.push([{ kind: 'sec4_5_contracts_safety' }]);
-      }
-    }
-
-    // Sheet 3: Maintenance Matrix + Horizontal Chart (unified inside sec6_matrix for standard reports)
-    if (sitesCount <= 8 && categoriesCount <= 16) {
-      pages.push([
-        { kind: 'sec6_matrix', siteStart: 0, siteEnd: sitesCount, includeSummaryRows: true },
-      ]);
-    } else {
-      const siteChunks = chunkRange(sitesCount, 8);
-      siteChunks.forEach(([siteStart, siteEnd], idx) => {
-        pages.push([
-          {
-            kind: 'sec6_matrix',
-            siteStart,
-            siteEnd,
-            includeSummaryRows: idx === siteChunks.length - 1,
-          },
-        ]);
-      });
-      pages.push([{ kind: 'sec6_chart' }]);
-    }
-
-    // Sheet 4: Logistics & Maintenance Sources + Security Matrix
-    pages.push([{ kind: 'sec7_8_maint_logistics' }, { kind: 'sec9_security' }]);
-
-    // Sheet 5: Operational Tasks + Challenges + Signatures
-    if (tasksCount <= 6 && challengesCount <= 4) {
-      pages.push([
-        { kind: 'sec10_tasks', start: 0, end: tasksCount },
-        { kind: 'sec11_challenges', start: 0, end: challengesCount },
-        { kind: 'sec12_signatures' },
-      ]);
-    } else {
-      const taskChunks = chunkRange(tasksCount, 8);
-      taskChunks.forEach(([start, end]) => {
-        pages.push([{ kind: 'sec10_tasks', start, end }]);
-      });
-      const chChunks = chunkRange(challengesCount, 5);
-      chChunks.forEach(([start, end], idx) => {
-        const blocks: BlockSpec[] = [{ kind: 'sec11_challenges', start, end }];
-        if (idx === chChunks.length - 1 && end - start <= 3) {
-          blocks.push({ kind: 'sec12_signatures' });
-        }
-        pages.push(blocks);
-      });
-      if (!pages[pages.length - 1].some((b) => b.kind === 'sec12_signatures')) {
-        pages.push([{ kind: 'sec12_signatures' }]);
-      }
-    }
-
-    return pages;
-  }
-
-  // LANDSCAPE (1076px × 740px per exact native A4 Landscape sheet)
-  const pages: PagePlan[] = [];
-
-  // Sheet 1: Executive Summary + Operations Summary Strip (7 cards)
-  pages.push([{ kind: 'sec1_exec' }, { kind: 'sec_ops' }]);
-
-  // Sheet 2: Section 2 Performance Overview
-  pages.push([{ kind: 'sec2_perf' }]);
-
-  // Sheet 3: Section 3 Services Summary & Completion Indicators
-  const svcChunks = chunkRange(servicesCount, 12);
-  svcChunks.forEach(([start, end]) => {
-    pages.push([{ kind: 'sec3_summary', start, end }]);
-  });
-
-  // Sheet 4: Sections 4 & 5 Contracts & Fire Safety
-  pages.push([{ kind: 'sec4_5_contracts_safety' }]);
-
-  // Sheet 5: Section 6 Maintenance Details Matrix + Chart (unified inside sec6_matrix)
-  if (sitesCount <= 6 && categoriesCount <= 12) {
-    pages.push([
-      { kind: 'sec6_matrix', siteStart: 0, siteEnd: sitesCount, includeSummaryRows: true },
-    ]);
-  } else {
-    const siteChunks = chunkRange(sitesCount, 6);
-    siteChunks.forEach(([siteStart, siteEnd], idx) => {
-      pages.push([
-        {
-          kind: 'sec6_matrix',
-          siteStart,
-          siteEnd,
-          includeSummaryRows: idx === siteChunks.length - 1,
-        },
-      ]);
-    });
-    pages.push([{ kind: 'sec6_chart' }]);
-  }
-
-  // Sheet 6: Sections 8 & 7 + Section 9 Security & Reception
-  if (securityCount <= 8) {
-    pages.push([{ kind: 'sec7_8_maint_logistics' }, { kind: 'sec9_security' }]);
-  } else {
-    pages.push([{ kind: 'sec7_8_maint_logistics' }]);
-    pages.push([{ kind: 'sec9_security' }]);
-  }
-
-  // Sheet 7+: Section 10 Operational Tasks
-  const taskChunks = chunkRange(tasksCount, 6);
-  taskChunks.forEach(([start, end]) => {
-    pages.push([{ kind: 'sec10_tasks', start, end }]);
-  });
-
-  // Final Sheet(s): Section 11 Challenges + Section 12 Official Signatures
-  const chChunks = chunkRange(challengesCount, 4);
-  chChunks.forEach(([start, end], idx) => {
-    const blocks: BlockSpec[] = [{ kind: 'sec11_challenges', start, end }];
-    if (idx === chChunks.length - 1 && end - start <= 3) {
-      blocks.push({ kind: 'sec12_signatures' });
-    }
-    pages.push(blocks);
-  });
-  if (!pages[pages.length - 1].some((b) => b.kind === 'sec12_signatures')) {
-    pages.push([{ kind: 'sec12_signatures' }]);
-  }
-
-  return pages;
-}
-
-function refineOverflowingPages(
-  currentPages: PagePlan[],
-  overflowingPageIndices: number[]
-): PagePlan[] | null {
-  if (overflowingPageIndices.length === 0) return null;
-  const firstOverflowIdx = overflowingPageIndices[0];
-  const nextPages = currentPages.map((p) => [...p]);
-  const targetPage = nextPages[firstOverflowIdx];
-  if (!targetPage || targetPage.length === 0) return null;
-
-  // Case A: Page has 2+ distinct sections -> peel the last section onto the next page
-  if (targetPage.length > 1) {
-    const movedBlock = targetPage.pop()!;
-    nextPages.splice(firstOverflowIdx + 1, 0, [movedBlock]);
-    return nextPages;
-  }
-
-  // Case B: Single splittable table block overflows -> bisect its row range
-  const sole = targetPage[0];
-  if (
-    sole.kind === 'sec3_summary' ||
-    sole.kind === 'sec10_tasks' ||
-    sole.kind === 'sec11_challenges'
-  ) {
-    const count = sole.end - sole.start;
-    if (count > 1) {
-      const splitAt = sole.start + Math.max(1, Math.floor(count / 2));
-      const firstHalf: BlockSpec = { ...sole, end: splitAt };
-      const secondHalf: BlockSpec = { ...sole, start: splitAt };
-      nextPages.splice(firstOverflowIdx, 1, [firstHalf], [secondHalf]);
-      return nextPages;
-    }
-  }
-
-  if (sole.kind === 'sec6_matrix') {
-    const count = sole.siteEnd - sole.siteStart;
-    if (count > 8) {
-      const splitAt = sole.siteStart + Math.max(1, Math.floor(count / 2));
-      const firstHalf: BlockSpec = {
-        kind: 'sec6_matrix',
-        siteStart: sole.siteStart,
-        siteEnd: splitAt,
-        includeSummaryRows: false,
-      };
-      const secondHalf: BlockSpec = {
-        kind: 'sec6_matrix',
-        siteStart: splitAt,
-        siteEnd: sole.siteEnd,
-        includeSummaryRows: sole.includeSummaryRows,
-      };
-      nextPages.splice(firstOverflowIdx, 1, [firstHalf], [secondHalf]);
-      return nextPages;
-    }
-  }
-
-  return null;
 }
 
 export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
@@ -493,6 +300,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       ? sortedSitesByFaults[0]
       : null;
 
+  const exportableTasks = useMemo(() => filterExportableTasks(report.tasks), [report.tasks]);
+  const exportableChallenges = useMemo(
+    () => filterExportableChallenges(report.challenges),
+    [report.challenges]
+  );
+
   const dataSignature = useMemo(
     () =>
       [
@@ -505,10 +318,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         sites.length,
         categories.length,
         metrics.securityWithPct.length,
-        report.tasks.length,
-        report.challenges.length,
-        report.tasks.map((t) => `${t.topic.length}:${t.taskName.length}`).join(','),
-        report.challenges
+        exportableTasks.length,
+        exportableChallenges.length,
+        exportableTasks.map((t) => `${t.topic.length}:${t.taskName.length}:${t.status}:${t.completionPct}`).join(','),
+        exportableChallenges
           .map((c) => `${c.challengeText.length}:${c.updateText.length}:${c.recommendationText.length}`)
           .join(','),
         report.contracts.map((c) => c.notes.length).join(','),
@@ -524,8 +337,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       sites.length,
       categories.length,
       metrics.securityWithPct.length,
-      report.tasks,
-      report.challenges,
+      exportableTasks,
+      exportableChallenges,
       report.contracts,
       report.safety,
     ]
@@ -533,23 +346,25 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
 
   const initialPages = useMemo(
     () =>
-      buildInitialPages({
+      buildAdaptivePagePlan({
         orientation,
-        servicesCount: sortedSummary.length,
-        sitesCount: sites.length,
-        categoriesCount: categories.length,
+        report,
+        services: sortedSummary,
+        sites,
+        categories,
         securityCount: metrics.securityWithPct.length,
-        tasksCount: report.tasks.length,
-        challengesCount: report.challenges.length,
+        tasks: exportableTasks,
+        challenges: exportableChallenges,
       }),
     [
       orientation,
-      sortedSummary.length,
-      sites.length,
-      categories.length,
+      report,
+      sortedSummary,
+      sites,
+      categories,
       metrics.securityWithPct.length,
-      report.tasks.length,
-      report.challenges.length,
+      exportableTasks,
+      exportableChallenges,
     ]
   );
 
@@ -1382,6 +1197,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         const rows = sortedSummary.slice(block.start, block.end);
         const showFooter = block.end >= sortedSummary.length;
         const isPartial = block.start > 0 || block.end < sortedSummary.length;
+        const rowPadCls = block.compact ? 'py-0.5' : isPortrait ? 'py-1.5' : 'py-1';
         return (
           <section key={key} className="rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden">
             {renderRibbonHeader(
@@ -1403,13 +1219,13 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 </colgroup>
                 <thead className="bg-[#012E5E] text-white">
                   <tr>
-                    <th className="py-1 px-1 text-center font-extrabold">#</th>
-                    <th className="py-1 px-2 text-start font-extrabold">الخدمة · Service</th>
-                    <th className="py-1 px-1 text-center font-extrabold">الطلبات المستلمة</th>
-                    <th className="py-1 px-1 text-center font-extrabold">الطلبات المنفذة</th>
-                    <th className="py-1 px-2 text-center font-extrabold">مؤشر الإنجاز</th>
-                    <th className="py-1 px-1 text-center font-extrabold">النسبة</th>
-                    <th className="py-1 px-1 text-center font-extrabold">المستوى</th>
+                    <th className="py-1.5 px-1 text-center font-extrabold">#</th>
+                    <th className="py-1.5 px-2 text-start font-extrabold">الخدمة · Service</th>
+                    <th className="py-1.5 px-1 text-center font-extrabold">الطلبات المستلمة</th>
+                    <th className="py-1.5 px-1 text-center font-extrabold">الطلبات المنفذة</th>
+                    <th className="py-1.5 px-2 text-center font-extrabold">مؤشر الإنجاز</th>
+                    <th className="py-1.5 px-1 text-center font-extrabold">النسبة</th>
+                    <th className="py-1.5 px-1 text-center font-extrabold">المستوى</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -1443,12 +1259,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                       >
                         <td
-                          className="py-0.5 px-1 text-center tabular-nums font-bold text-slate-600 report-num-cell"
+                          className={`${rowPadCls} px-1 text-center tabular-nums font-bold text-slate-600 report-num-cell`}
                           dir="ltr"
                         >
                           {formatNumber(idx + 1)}
                         </td>
-                        <td className="py-0.5 px-2 font-extrabold text-[#012E5E]">
+                        <td className={`${rowPadCls} px-2 font-extrabold text-[#012E5E]`}>
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span
                               className="w-2 h-2 rounded-md shrink-0"
@@ -1457,7 +1273,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                             <span className="leading-tight break-words">{s.nameAr}</span>
                           </div>
                         </td>
-                        <td className="py-0.5 px-1 text-center">
+                        <td className={`${rowPadCls} px-1 text-center`}>
                           <span
                             dir="ltr"
                             className="inline-flex items-center justify-center min-w-[44px] px-1.5 py-0.5 rounded bg-white border border-[#C5D8EE] font-black text-[#012E5E] tabular-nums report-num-cell"
@@ -1465,7 +1281,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                             {formatNumber(s.receivedCount)}
                           </span>
                         </td>
-                        <td className="py-0.5 px-1 text-center">
+                        <td className={`${rowPadCls} px-1 text-center`}>
                           <span
                             dir="ltr"
                             className="inline-flex items-center justify-center min-w-[44px] px-1.5 py-0.5 rounded bg-emerald-50/70 border border-emerald-300 font-black text-[#069B74] tabular-nums report-num-cell"
@@ -1473,7 +1289,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                             {formatNumber(s.executedCount)}
                           </span>
                         </td>
-                        <td className="py-0.5 px-2 align-middle">
+                        <td className={`${rowPadCls} px-2 align-middle`}>
                           <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden border border-slate-300/80">
                             <div
                               className="h-full rounded-full"
@@ -1485,12 +1301,12 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </td>
                         <td
-                          className="py-0.5 px-1 text-center font-black tabular-nums text-[#012E5E] report-num-cell"
+                          className={`${rowPadCls} px-1 text-center font-black tabular-nums text-[#012E5E] report-num-cell`}
                           dir="ltr"
                         >
                           {formatPct(s.completionPct, '—')}
                         </td>
-                        <td className="py-0.5 px-1 text-center">
+                        <td className={`${rowPadCls} px-1 text-center`}>
                           <span
                             className={`inline-block px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold border report-num-cell ${badgeClass}`}
                           >
@@ -1504,16 +1320,16 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 {showFooter && (
                   <tfoot className="bg-[#012E5E] text-white font-extrabold">
                     <tr>
-                      <td colSpan={2} className="py-1 px-2">
+                      <td colSpan={2} className="py-1.5 px-2">
                         الإجمالي العام ({formatNumber(sortedSummary.length)} خدمة) · Grand Total
                       </td>
-                      <td className="py-1 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
+                      <td className="py-1.5 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalReceived)}
                       </td>
-                      <td className="py-1 px-1 text-center tabular-nums text-emerald-300 report-num-cell" dir="ltr">
+                      <td className="py-1.5 px-1 text-center tabular-nums text-emerald-300 report-num-cell" dir="ltr">
                         {formatNumber(metrics.totalExecuted)}
                       </td>
-                      <td className="py-1 px-2 align-middle">
+                      <td className="py-1.5 px-2 align-middle">
                         <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-[#DFC076] rounded-full"
@@ -1523,10 +1339,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           />
                         </div>
                       </td>
-                      <td className="py-1 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
+                      <td className="py-1.5 px-1 text-center tabular-nums text-[#DFC076] report-num-cell" dir="ltr">
                         {formatPct(metrics.overallCompletionPct, '—')}
                       </td>
-                      <td className="py-1 px-1 text-center text-[#DFC076] report-num-cell">المعدل العام</td>
+                      <td className="py-1.5 px-1 text-center text-[#DFC076] report-num-cell">المعدل العام</td>
                     </tr>
                   </tfoot>
                 )}
@@ -1536,13 +1352,14 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         );
       }
 
-      case 'sec4_5_contracts_safety':
+      case 'sec4_5_contracts_safety': {
+        const notesMinHeightCls = block.compact ? 'min-h-[48px]' : isPortrait ? 'min-h-[82px]' : 'min-h-[56px]';
         return (
           <div key={key} className={`grid grid-cols-12 ${isPortrait ? 'gap-2' : 'gap-2.5'} items-stretch`}>
             {/* Section 4: العقود والرخص */}
             <section className="col-span-7 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('4. العقود والرخص', 'Contracts & Licenses')}
-              <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} grid grid-cols-3 flex-1`}>
+              <div className={`${isPortrait ? 'p-2 gap-2' : 'p-2 gap-2'} grid grid-cols-3 flex-1`}>
                 {report.contracts.map((c, idx) => {
                   const cardSkins = [
                     'from-[#EAF4FC] to-[#F7FAFC] border-[#96C2EC]',
@@ -1561,7 +1378,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         <div
                           className={`${
                             headerSkins[idx % headerSkins.length]
-                          } text-white px-2 py-1 text-[10px] font-extrabold ${
+                          } text-white px-2 py-1.5 text-[10px] font-extrabold ${
                             orientation === 'portrait'
                               ? 'flex flex-col items-start gap-0.5'
                               : 'flex items-center justify-between gap-1'
@@ -1572,8 +1389,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                             {c.nameEn}
                           </span>
                         </div>
-                        <div className="p-1.5 grid grid-cols-2 gap-1 text-center">
-                          <div className="bg-white rounded-lg p-1 border border-emerald-300 shadow-2xs">
+                        <div className="p-2 grid grid-cols-2 gap-1.5 text-center">
+                          <div className="bg-white rounded-lg p-1.5 border border-emerald-300 shadow-2xs">
                             <p className={`${isPortrait ? 'text-[8.5px]' : 'text-[9px]'} font-extrabold text-[#069B74]`}>الفعّالة</p>
                             <p
                               className="text-sm font-black text-[#069B74] tabular-nums mt-0.5"
@@ -1582,7 +1399,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                               {formatNumber(c.activeCount)}
                             </p>
                           </div>
-                          <div className="bg-white rounded-lg p-1 border border-rose-300 shadow-2xs">
+                          <div className="bg-white rounded-lg p-1.5 border border-rose-300 shadow-2xs">
                             <p className={`${isPortrait ? 'text-[8.5px]' : 'text-[9px]'} font-extrabold text-[#C43D47]`}>غير الفعّالة</p>
                             <p
                               className="text-sm font-black text-[#C43D47] tabular-nums mt-0.5"
@@ -1593,10 +1410,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </div>
                       </div>
-                      <div className="px-1.5 pb-1.5 flex-1 flex flex-col">
-                        <div className="bg-white/90 rounded-lg p-1.5 border border-slate-200 text-[9.5px] min-h-[48px] flex-1">
+                      <div className="px-2 pb-2 flex-1 flex flex-col">
+                        <div className={`bg-white/90 rounded-lg p-2 border border-slate-200 text-[9.5px] ${notesMinHeightCls} flex-1`}>
                           <p className="font-extrabold text-[#012E5E] mb-0.5">الملاحظات:</p>
-                          <p className="text-slate-700 report-text-cell">
+                          <p className="text-slate-700 report-text-cell leading-relaxed">
                             {c.notes || 'لا توجد ملاحظات مسجلة'}
                           </p>
                         </div>
@@ -1610,7 +1427,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             {/* Section 5: الطفايات وملاحظات المخاطر */}
             <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
               {renderRibbonHeader('5. الطفايات وملاحظات المخاطر', 'Fire Safety & Hazard Notes', true)}
-              <div className={`${isPortrait ? 'p-1.5 gap-1.5' : 'p-2 gap-2'} grid grid-cols-2 flex-1`}>
+              <div className={`${isPortrait ? 'p-2 gap-2' : 'p-2 gap-2'} grid grid-cols-2 flex-1`}>
                 {report.safety.map((s, idx) => {
                   const isFire = s.groupKey === 'fire_extinguishers' || idx === 0;
                   const photoSrc = isFire ? fireExtImg : safetyImg;
@@ -1622,34 +1439,34 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                       className="rounded-xl border border-[#C5D8EE] bg-gradient-to-b from-[#F7FAFC] to-white overflow-hidden flex flex-col justify-between shadow-2xs"
                     >
                       <div>
-                        <div className={`bg-[#012E5E] text-white px-2 py-1 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'} font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]`}>
+                        <div className={`bg-[#012E5E] text-white px-2 py-1.5 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'} font-extrabold flex items-center justify-between gap-1 border-b border-[#C99E4A]`}>
                           <span className="leading-tight">{s.nameAr}</span>
                           <Flame className="w-3 h-3 text-[#DFC076] shrink-0" />
                         </div>
-                        <div className={`${isPortrait ? 'p-1.5 pb-1 gap-1' : 'p-2 pb-1.5 gap-1.5'} flex items-center`}>
+                        <div className={`${isPortrait ? 'p-2 pb-1.5 gap-1.5' : 'p-2 pb-1.5 gap-1.5'} flex items-center`}>
                           <img
                             src={photoSrc}
                             alt={s.nameAr}
-                            className={`${isPortrait ? 'w-8 h-8' : 'w-10 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
+                            className={`${isPortrait ? 'w-9 h-9' : 'w-10 h-10'} rounded-lg object-cover border border-slate-200 shrink-0`}
                           />
                           <div className="flex-1 grid grid-cols-2 gap-1 text-center">
-                            <div className="bg-emerald-50 rounded-lg p-0.5 border border-emerald-300">
+                            <div className="bg-emerald-50 rounded-lg p-1 border border-emerald-300">
                               <p className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} font-bold text-[#069B74] leading-tight`}>
                                 {primaryLabel}
                               </p>
                               <p
-                                className="text-xs font-black text-[#069B74] tabular-nums"
+                                className="text-xs font-black text-[#069B74] tabular-nums mt-0.5"
                                 dir="ltr"
                               >
                                 {formatNumber(s.primaryCount)}
                               </p>
                             </div>
-                            <div className="bg-rose-50 rounded-lg p-0.5 border border-rose-300">
+                            <div className="bg-rose-50 rounded-lg p-1 border border-rose-300">
                               <p className={`${isPortrait ? 'text-[7.5px]' : 'text-[8.5px]'} font-bold text-[#C43D47] leading-tight`}>
                                 {secondaryLabel}
                               </p>
                               <p
-                                className="text-xs font-black text-[#C43D47] tabular-nums"
+                                className="text-xs font-black text-[#C43D47] tabular-nums mt-0.5"
                                 dir="ltr"
                               >
                                 {formatNumber(s.secondaryCount)}
@@ -1658,10 +1475,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                           </div>
                         </div>
                       </div>
-                      <div className="px-1.5 pb-1.5 flex-1 flex flex-col">
-                        <div className="bg-white rounded-lg p-1.5 border border-slate-200 text-[9.5px] min-h-[48px] flex-1">
+                      <div className="px-2 pb-2 flex-1 flex flex-col">
+                        <div className={`bg-white rounded-lg p-2 border border-slate-200 text-[9.5px] ${notesMinHeightCls} flex-1`}>
                           <p className="font-extrabold text-[#012E5E] mb-0.5">الملاحظات:</p>
-                          <p className="text-slate-700 report-text-cell">
+                          <p className="text-slate-700 report-text-cell leading-relaxed">
                             {s.notes || 'لا توجد ملاحظات مسجلة'}
                           </p>
                         </div>
@@ -1673,6 +1490,7 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
             </section>
           </div>
         );
+      }
 
       case 'sec6_matrix': {
         const slicedSites = sites.slice(block.siteStart, block.siteEnd);
@@ -1683,10 +1501,11 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         }
         if (chunks.length === 0) chunks.push([]);
         const embedHorizontalChart =
-          block.includeSummaryRows &&
-          (orientation === 'portrait'
-            ? sites.length <= 8 && categories.length <= 16
-            : sites.length <= 6 && categories.length <= 12);
+          block.embedChart ??
+          (block.includeSummaryRows &&
+            (orientation === 'portrait'
+              ? sites.length <= 8 && categories.length <= 16
+              : sites.length <= 6 && categories.length <= 12));
 
         return (
           <section
@@ -1963,10 +1782,10 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
         return (
           <div key={key} className={`grid grid-cols-12 ${isPortrait ? 'gap-2' : 'gap-2.5'} items-stretch`}>
             {/* SECTION 8: الدعم اللوجستي */}
-            <section className="col-span-7 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
+            <section className="col-span-7 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col h-full">
               {renderRibbonHeader('8. الدعم اللوجستي', 'Logistics Channels')}
-              <div className="p-2 space-y-1.5 flex-1 flex flex-col justify-between">
-                <table className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+              <div className="p-2 gap-1.5 flex-1 flex flex-col">
+                <table className={`w-full shrink-0 ${isPortrait ? 'text-[9.5px]' : 'text-[10px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
                   <colgroup>
                     <col style={{ width: '18%' }} />
                     {metrics.logisticsWithPct.map((l) => (
@@ -2027,15 +1846,15 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   </tbody>
                 </table>
 
-                <LogisticsHorizontalChart channels={report.logistics} variant="print" />
+                <LogisticsHorizontalChart channels={report.logistics} variant="print" className="flex-1" />
               </div>
             </section>
 
             {/* SECTION 7: خدمات الصيانة (Sources Table + Donut Chart) */}
-            <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col">
+            <section className="col-span-5 rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden flex flex-col h-full">
               {renderRibbonHeader('7. خدمات الصيانة (مصادر الطلبات)', 'Maintenance Services Sources', true)}
-              <div className="p-2 space-y-1.5 flex-1 flex flex-col justify-between">
-                <table className={`w-full ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
+              <div className="p-2 gap-1.5 flex-1 flex flex-col">
+                <table className={`w-full shrink-0 ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'} border border-[#C5D8EE] border-collapse table-fixed`}>
                   <colgroup>
                     <col style={{ width: '56%' }} />
                     <col style={{ width: '21%' }} />
@@ -2097,63 +1916,98 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                   </tfoot>
                 </table>
 
-                <div className="rounded-xl border border-[#C5D8EE] bg-[#F7FAFC] p-1.5 flex items-center justify-between gap-1.5">
-                  <div className="relative flex items-center justify-center shrink-0">
-                    {maintChartData.length > 0 ? (
-                      <>
-                        <PieChart width={isPortrait ? 86 : 102} height={isPortrait ? 80 : 92}>
-                          <Pie
-                            data={maintChartData}
-                            dataKey="value"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={isPortrait ? 20 : 25}
-                            outerRadius={isPortrait ? 34 : 40}
-                            paddingAngle={2}
-                            isAnimationActive={false}
-                          >
-                            {maintChartData.map((d) => (
-                              <Cell key={d.name} fill={d.color} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                          <span
-                            className="text-[11px] font-black text-[#012E5E] tabular-nums"
-                            dir="ltr"
-                          >
-                            {formatNumber(maintTotal)}
+                <div className="flex-1 flex flex-col justify-between rounded-lg border border-[#C5D8EE] bg-gradient-to-b from-white to-[#F7FAFE] px-2.5 py-1.5">
+                  <div className="flex items-center justify-between gap-2 border-b border-[#E3EDF7] pb-1 mb-1 shrink-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-1.5 h-4 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
+                      <h4 className="text-[10px] font-extrabold text-[#0C2544] leading-tight">
+                        توزيع مصادر طلبات الصيانة
+                      </h4>
+                    </div>
+                    <div className="flex items-center gap-1.5 rounded bg-[#0C2544] text-white border border-[#C6A35E]/60 px-2 py-0.5 shrink-0 text-[8.5px]">
+                      <Wrench className="w-3 h-3 text-[#DFC076] shrink-0" />
+                      <span className="font-bold text-[#EAF2FA]/90">إجمالي الطلبات:</span>
+                      <span className="font-black text-[#DFC076] tabular-nums" dir="ltr">
+                        {formatNumber(maintTotal)}
+                      </span>
+                      <span className="font-bold text-white/90">طلباً</span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 flex items-center justify-between gap-2 py-0.5">
+                    <div className="relative flex items-center justify-center shrink-0">
+                      {maintChartData.length > 0 ? (
+                        <>
+                          <PieChart width={isPortrait ? 100 : 112} height={isPortrait ? 100 : 112}>
+                            <Pie
+                              data={maintChartData}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={isPortrait ? 27 : 31}
+                              outerRadius={isPortrait ? 44 : 50}
+                              paddingAngle={2}
+                              isAnimationActive={false}
+                            >
+                              {maintChartData.map((d) => (
+                                <Cell key={d.name} fill={d.color} stroke="#FFFFFF" strokeWidth={1.5} />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                            <span
+                              className="text-[11.5px] font-black text-[#012E5E] tabular-nums leading-none"
+                              dir="ltr"
+                            >
+                              {formatNumber(maintTotal)}
+                            </span>
+                            <span className="text-[7.5px] font-bold text-slate-500 mt-0.5">طلباً</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="w-20 h-20 flex items-center justify-center text-[9.5px] text-slate-400">
+                          لا توجد بيانات
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={`flex-1 flex flex-col justify-center gap-1.5 min-w-0 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'}`}>
+                      <div className="flex flex-col gap-1 bg-white px-2 py-1.5 rounded-lg border border-[#C5D8EE]">
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="w-2 h-2 rounded-full bg-[#0C4176] shrink-0" />
+                            <span className="font-extrabold text-[#012E5E] leading-tight">من قسم المرافق</span>
+                          </div>
+                          <span className="font-black text-[#0C4176] tabular-nums report-num-cell shrink-0" dir="ltr">
+                            {formatNumber(maintFromFM)} ({formatPercentage(maintFmPct)})
                           </span>
                         </div>
-                      </>
-                    ) : (
-                      <div className="w-16 h-16 flex items-center justify-center text-[9.5px] text-slate-400">
-                        لا توجد بيانات
+                        <div className="w-full h-1.5 rounded-full bg-[#EAF2FA] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-[#0C4176]"
+                            style={{ width: `${Math.max(maintFromFM > 0 ? 6 : 0, Math.min(100, maintFmPct))}%` }}
+                          />
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  <div className={`flex-1 space-y-1 min-w-0 ${isPortrait ? 'text-[8.5px]' : 'text-[9.5px]'}`}>
-                    <p className={`font-extrabold text-[#012E5E] ${isPortrait ? 'text-[9.5px]' : 'text-[10.5px]'}`}>
-                      توزيع مصادر طلبات الصيانة
-                    </p>
-                    <div className="flex items-center justify-between gap-1 bg-white px-1.5 py-1 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-[#0C4176] shrink-0" />
-                        <span className="font-bold text-[#012E5E] leading-tight">من قسم المرافق</span>
+
+                      <div className="flex flex-col gap-1 bg-white px-2 py-1.5 rounded-lg border border-[#E4CFA0]">
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="w-2 h-2 rounded-full bg-[#C99E4A] shrink-0" />
+                            <span className="font-extrabold text-[#012E5E] leading-tight">من الإدارات الأخرى</span>
+                          </div>
+                          <span className="font-black text-[#9A6700] tabular-nums report-num-cell shrink-0" dir="ltr">
+                            {formatNumber(maintFromOther)} ({formatPercentage(maintOtherPct)})
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full bg-[#FDF8EC] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-[#C99E4A]"
+                            style={{ width: `${Math.max(maintFromOther > 0 ? 6 : 0, Math.min(100, maintOtherPct))}%` }}
+                          />
+                        </div>
                       </div>
-                      <span className="font-extrabold text-[#0C4176] tabular-nums report-num-cell shrink-0" dir="ltr">
-                        {formatNumber(maintFromFM)} ({formatPercentage(maintFmPct)})
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-1 bg-white px-1.5 py-1 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-[#C99E4A] shrink-0" />
-                        <span className="font-bold text-[#012E5E] leading-tight">من الإدارات الأخرى</span>
-                      </div>
-                      <span className="font-extrabold text-[#9A6700] tabular-nums report-num-cell shrink-0" dir="ltr">
-                        {formatNumber(maintFromOther)} ({formatPercentage(maintOtherPct)})
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -2286,8 +2140,8 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       }
 
       case 'sec10_tasks': {
-        const sliced = report.tasks.slice(block.start, block.end);
-        const isPartial = block.start > 0 || block.end < report.tasks.length;
+        const sliced = exportableTasks.slice(block.start, block.end);
+        const isPartial = block.start > 0 || block.end < exportableTasks.length;
         return (
           <section key={key} className="rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden">
             {renderRibbonHeader(
@@ -2391,8 +2245,9 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
       }
 
       case 'sec11_challenges': {
-        const sliced = report.challenges.slice(block.start, block.end);
-        const isPartial = block.start > 0 || block.end < report.challenges.length;
+        const sliced = exportableChallenges.slice(block.start, block.end);
+        const isPartial = block.start > 0 || block.end < exportableChallenges.length;
+        const cellPadCls = block.compact ? 'py-1' : isPortrait && sliced.length <= 5 ? 'py-2' : 'py-1.5';
         return (
           <section key={key} className="rounded-xl border border-[#B8CDE4] bg-white shadow-xs overflow-hidden">
             {renderRibbonHeader(
@@ -2411,14 +2266,14 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                 </colgroup>
                 <thead className="bg-[#012E5E] text-white">
                   <tr>
-                    <th className="py-1 px-1 text-center font-extrabold">#</th>
-                    <th className="py-1 px-2 text-start font-extrabold">
+                    <th className="py-1.5 px-1 text-center font-extrabold">#</th>
+                    <th className="py-1.5 px-2 text-start font-extrabold">
                       التحديات والعوائق · Challenges
                     </th>
-                    <th className="py-1 px-2 text-start font-extrabold">
+                    <th className="py-1.5 px-2 text-start font-extrabold">
                       التحديث والإجراءات المتخذة · Updates
                     </th>
-                    <th className="py-1 px-2 text-start font-extrabold">
+                    <th className="py-1.5 px-2 text-start font-extrabold">
                       التوصية التنفيذية · Recommendation
                     </th>
                   </tr>
@@ -2432,18 +2287,18 @@ export const OfficialReportLayout: React.FC<OfficialReportLayoutProps> = ({
                         className={idx % 2 === 1 ? 'bg-[#F4F8FC]' : 'bg-white'}
                       >
                         <td
-                          className="py-1 px-1 text-center tabular-nums font-bold align-top report-num-cell"
+                          className={`${cellPadCls} px-1 text-center tabular-nums font-bold align-top report-num-cell`}
                           dir="ltr"
                         >
                           {formatNumber(idx + 1)}
                         </td>
-                        <td className="py-1 px-2 report-text-cell font-extrabold text-[#9A6700] align-top">
+                        <td className={`${cellPadCls} px-2 report-text-cell font-extrabold text-[#9A6700] align-top leading-relaxed`}>
                           {ch.challengeText || '—'}
                         </td>
-                        <td className="py-1 px-2 report-text-cell text-slate-800 align-top">
+                        <td className={`${cellPadCls} px-2 report-text-cell text-slate-800 align-top leading-relaxed`}>
                           {ch.updateText || '—'}
                         </td>
-                        <td className="py-1 px-2 report-text-cell font-extrabold text-[#012E5E] align-top">
+                        <td className={`${cellPadCls} px-2 report-text-cell font-extrabold text-[#012E5E] align-top leading-relaxed`}>
                           {ch.recommendationText || '—'}
                         </td>
                       </tr>

@@ -945,8 +945,8 @@ export default function App() {
     if (exportingPdfKey === key) return;
     setExportingPdfKey(key);
     notifyInfo(
-      'جارٍ تجهيز التقرير الرسمي بكامل البطاقات والصور والجداول...',
-      'يتم الآن إنشاء ملف PDF الرسمي متعدد الصفحات بدقة عالية.',
+      'جارٍ تجهيز التقرير وتوزيع صفحاته تلقائياً...',
+      'يتم الآن قياس المحتوى وتوزيع الأقسام والجداول والرسوم البيانية تلقائياً على صفحات A4.',
       {
         dedupeKey: `pdf_prep_${key}`,
         context: 'print',
@@ -983,7 +983,7 @@ export default function App() {
         liveData,
       });
       notifySuccess(
-        'تم إنشاء وتنزيل ملف PDF الرسمي بنجاح.',
+        'تم إنشاء التقرير بصيغة PDF بنجاح.',
         `تم تنزيل المستند التنفيذي ${filename}${pageCount ? ` (${pageCount} صفحات A4)` : ''} شاملاً جميع البطاقات والصور والجداول والرسوم البيانية.`,
         {
           dedupeKey: `pdf_ok_${key}_${orientation}`,

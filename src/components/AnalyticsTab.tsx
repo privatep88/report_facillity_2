@@ -12,7 +12,6 @@ import {
   ChevronUp,
   Coins,
   FileCheck2,
-  FileSpreadsheet,
   FileText,
   Filter,
   Flame,
@@ -351,15 +350,6 @@ export const AnalyticsTab: React.FC = () => {
             >
               <Printer className="w-4 h-4 shrink-0" />
               <span>معاينة وطباعة A4</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              disabled={exportingExcel}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#069B74] hover:bg-[#058261] disabled:opacity-60 text-white text-xs font-bold shadow-sm cursor-pointer whitespace-nowrap"
-            >
-              {exportingExcel ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 shrink-0" />}
-              <span>{exportingExcel ? 'جارٍ التصدير...' : 'تصدير تحليلات Excel'}</span>
             </button>
           </div>
         </div>

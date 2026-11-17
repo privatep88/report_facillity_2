@@ -520,7 +520,7 @@ export async function exportReportDirectPdf(params: {
   orientation?: PdfOrientation;
   liveData?: DirectReportSnapshotData;
 }): Promise<DirectPdfExportResult> {
-  const { reportId, versionNumber, orientation = 'landscape', liveData } = params;
+  const { reportId, versionNumber, orientation = 'portrait', liveData } = params;
   const bundle = await loadReportSnapshotBundle({ reportId, versionNumber, liveData });
 
   const sheetDims = A4_SHEET_DIMENSIONS[orientation];

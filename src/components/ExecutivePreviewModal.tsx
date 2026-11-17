@@ -262,7 +262,9 @@ export const ExecutivePreviewModal: React.FC<{
               ) : (
                 <FileText className="w-4 h-4" />
               )}
-              <span>{exportingPdf ? 'جارٍ إنشاء PDF...' : 'تصدير PDF'}</span>
+              <span>
+                {exportingPdf ? 'جارٍ تجهيز التقرير وتوزيع صفحاته تلقائياً...' : 'تصدير PDF'}
+              </span>
             </button>
           )}
 

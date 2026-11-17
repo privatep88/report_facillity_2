@@ -106,21 +106,7 @@ import {
   resolveTopServiceKpiImage,
 } from '../utils/executiveKpiVisuals.ts';
 
-const QUICK_SECTIONS = [
-  { id: 'sec-summary', label: 'الملخص التنفيذي' },
-  { id: 'sec-ops-strip', label: 'ملخص العمليات والاعتماد' },
-  { id: 'sec-overview', label: 'توزيع الأداء' },
-  { id: 'sec-services', label: 'ملخص الخدمات' },
-  { id: 'sec-contracts', label: 'العقود والرخص' },
-  { id: 'sec-safety', label: 'الطفايات والمخاطر' },
-  { id: 'sec-maintenance', label: 'مصفوفة الصيانة' },
-  { id: 'sec-logistics', label: 'الدعم اللوجستي' },
-  { id: 'sec-maint-services', label: 'مصادر الصيانة' },
-  { id: 'sec-security', label: 'الأمن والاستقبال' },
-  { id: 'sec-tasks', label: 'المهام' },
-  { id: 'sec-challenges', label: 'التحديات والتوصيات' },
-  { id: 'sec-approval', label: 'الإعداد والاعتماد' },
-];
+import { ReportSectionNavigation } from './ReportSectionNavigation.tsx';
 
 const WORKFLOW_STEPS: Array<{ key: string; label: string }> = [
   { key: REPORT_STATUSES.DRAFT, label: 'مسودة' },
@@ -845,7 +831,9 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                 ) : (
                   <FileText className="w-3.5 h-3.5" />
                 )}
-                <span>{exportingPdf ? 'جارٍ إنشاء PDF...' : 'تصدير PDF'}</span>
+                <span>
+                  {exportingPdf ? 'جارٍ تجهيز التقرير وتوزيع صفحاته تلقائياً...' : 'تصدير PDF'}
+                </span>
               </button>
             )}
 
@@ -931,21 +919,8 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           </div>
         </div>
 
-        {/* Sleek Quick-Jump Strip */}
-        <nav
-          aria-label="التنقل السريع داخل أقسام التقرير"
-          className="pt-2 border-t border-slate-100 flex items-center gap-1 overflow-x-auto fm-scroll"
-        >
-          {QUICK_SECTIONS.map((sec) => (
-            <a
-              key={sec.id}
-              href={`#${sec.id}`}
-              className="px-2.5 py-1 rounded-md text-[11px] font-bold text-slate-600 hover:text-[#0B2341] hover:bg-[#EAF4FC] transition-colors whitespace-nowrap shrink-0"
-            >
-              {sec.label}
-            </a>
-          ))}
-        </nav>
+        {/* Adaptive Responsive Quick-Jump Navigation (Zero Horizontal Scrollbar) */}
+        <ReportSectionNavigation />
       </div>
 
       {/* ================================================================= */}
@@ -2752,17 +2727,17 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
       </SectionCard>
 
       {/* SECTION 7 & 8: Logistics (Visual RIGHT in RTL) + Maintenance Services (Visual LEFT in RTL) */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* SECTION 8 (Visual RIGHT in RTL): Logistics */}
         <SectionCard
           id="sec-logistics"
           titleAr="الدعم اللوجستي"
           titleEn="Logistics Channels"
           icon={<Truck className="w-4 h-4" />}
-          className="xl:col-span-7"
-          bodyClassName="p-4 space-y-3"
+          className="lg:col-span-7 flex flex-col h-full"
+          bodyClassName="p-4 flex-1 flex flex-col gap-3"
         >
-          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+          <div className="overflow-x-auto border border-slate-200 rounded-xl shrink-0">
             <table className="w-full text-xs min-w-[520px]">
               <thead className="bg-[#DCE9F6] text-[#0B2341]">
                 <tr>
@@ -2816,7 +2791,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             </table>
           </div>
 
-          <LogisticsHorizontalChart channels={report.logistics} />
+          <LogisticsHorizontalChart channels={report.logistics} className="flex-1" />
         </SectionCard>
 
         {/* SECTION 7 (Visual LEFT in RTL): Maintenance Services */}
@@ -2825,10 +2800,10 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
           titleAr="خدمات الصيانة (مصادر الطلبات)"
           titleEn="Maintenance Services"
           icon={<Wrench className="w-4 h-4" />}
-          className="xl:col-span-5"
-          bodyClassName="p-4 space-y-3"
+          className="lg:col-span-5 flex flex-col h-full"
+          bodyClassName="p-4 flex-1 flex flex-col gap-3"
         >
-          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+          <div className="overflow-x-auto border border-slate-200 rounded-xl shrink-0">
             <table className="w-full text-xs">
               <thead className="bg-[#DCE9F6] text-[#0B2341]">
                 <tr>
@@ -2839,13 +2814,13 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <tr>
-                  <td className="py-2.5 px-3 text-center tabular-nums" dir="ltr">
+                  <td className="py-2 px-3 text-center tabular-nums" dir="ltr">
                     {formatNumber(1)}
                   </td>
-                  <td className="py-2.5 px-3 font-bold text-[#0B2341]">
+                  <td className="py-2 px-3 font-bold text-[#0B2341]">
                     طلبات الصيانة الواردة من قسم المرافق
                   </td>
-                  <td className="py-2 px-3 text-center">
+                  <td className="py-1.5 px-3 text-center">
                     <NumericInput
                       id="field-maint-svc-facilities"
                       min={0}
@@ -2862,13 +2837,13 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   </td>
                 </tr>
                 <tr>
-                  <td className="py-2.5 px-3 text-center tabular-nums" dir="ltr">
+                  <td className="py-2 px-3 text-center tabular-nums" dir="ltr">
                     {formatNumber(2)}
                   </td>
-                  <td className="py-2.5 px-3 font-bold text-[#0B2341]">
+                  <td className="py-2 px-3 font-bold text-[#0B2341]">
                     طلبات الصيانة الواردة من الإدارات الأخرى
                   </td>
-                  <td className="py-2 px-3 text-center">
+                  <td className="py-1.5 px-3 text-center">
                     <NumericInput
                       id="field-maint-svc-other"
                       min={0}
@@ -2887,10 +2862,10 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               </tbody>
               <tfoot className="bg-[#071E3D] text-white font-extrabold">
                 <tr>
-                  <td colSpan={2} className="py-2.5 px-3">
+                  <td colSpan={2} className="py-2 px-3">
                     الإجمالي · Total
                   </td>
-                  <td className="py-2.5 px-3 text-center tabular-nums text-[#DFC076]">
+                  <td className="py-2 px-3 text-center tabular-nums text-[#DFC076]">
                     {formatNumber(metrics.maintenanceServicesTotal)}
                   </td>
                 </tr>
@@ -2898,10 +2873,46 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
             </table>
           </div>
 
-          <div className="bg-[#F8FAFC] rounded-xl border border-slate-200 p-3 h-44">
+          <div className="flex-1 flex flex-col justify-between rounded-xl border border-[#D5E3F2] bg-gradient-to-b from-white to-[#F7FAFE] p-3.5 shadow-2xs min-h-[240px]">
+            {/* Matching Chart Header Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E3EDF7] pb-2.5 mb-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
+                <div className="min-w-0">
+                  <h4 className="text-xs font-extrabold text-[#0C2544] leading-tight">
+                    توزيع مصادر طلبات الصيانة
+                  </h4>
+                  <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                    نسبة الطلبات الواردة من قسم المرافق والإدارات الأخرى
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 rounded-lg bg-[#0C2544] text-white border border-[#C6A35E]/60 px-2.5 py-1.5 shadow-2xs shrink-0">
+                <div className="w-6 h-6 rounded-md bg-[#C6A35E]/20 border border-[#C6A35E]/50 flex items-center justify-center shrink-0">
+                  <Wrench className="w-3.5 h-3.5 text-[#DFC076]" />
+                </div>
+                <div className="text-right">
+                  <span className="block text-[9px] font-bold text-[#EAF2FA]/85 leading-none">
+                    إجمالي طلبات الصيانة
+                  </span>
+                  <div className="flex items-baseline gap-1 mt-0.5">
+                    <span
+                      className="text-sm font-extrabold text-[#DFC076] tabular-nums leading-none"
+                      dir="ltr"
+                    >
+                      {formatNumber(metrics.maintenanceServicesTotal)}
+                    </span>
+                    <span className="text-[10px] font-bold text-white/90 leading-none">طلباً</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {metrics.maintenanceServicesTotal > 0 ? (
-              <div className="h-full grid grid-cols-12 items-center gap-2">
-                <div className="col-span-5 h-full relative flex items-center justify-center">
+              <div className="flex-1 flex flex-col sm:flex-row items-center justify-between gap-3 py-1">
+                {/* Moderately Enlarged 1:1 Circular Donut Chart with Center Total */}
+                <div className="w-[144px] h-[144px] shrink-0 relative flex items-center justify-center">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -2910,14 +2921,14 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                         nameKey="name"
                         cx="50%"
                         cy="50%"
-                        innerRadius={26}
-                        outerRadius={54}
+                        innerRadius={40}
+                        outerRadius={64}
                         paddingAngle={2}
                       >
                         {maintenanceSourcesChartData
                           .filter((d) => d.value > 0)
                           .map((entry) => (
-                            <Cell key={entry.key} fill={entry.color} stroke="#FFFFFF" strokeWidth={1.5} />
+                            <Cell key={entry.key} fill={entry.color} stroke="#FFFFFF" strokeWidth={2} />
                           ))}
                       </Pie>
                       <Tooltip
@@ -2925,41 +2936,69 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       />
                     </PieChart>
                   </ResponsiveContainer>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                    <span
+                      className="text-base font-black text-[#0B2341] tabular-nums leading-none"
+                      dir="ltr"
+                    >
+                      {formatNumber(metrics.maintenanceServicesTotal)}
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-500 mt-0.5">إجمالي الطلبات</span>
+                  </div>
                 </div>
 
-                <div className="col-span-7 flex flex-col justify-center gap-2 pr-1">
-                  <div className="text-[11px] font-extrabold text-[#0B2341] border-b border-slate-200/80 pb-1">
-                    توزيع مصادر طلبات الصيانة
-                  </div>
+                {/* Rebalanced Legend Cards beside the Donut */}
+                <div className="flex-1 w-full flex flex-col justify-center gap-2.5 min-w-0">
                   {maintenanceSourcesChartData.map((item) => (
                     <div
                       key={item.key}
-                      className="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/70 text-[11px]"
+                      className={`flex flex-col gap-1.5 bg-white px-3 py-2.5 rounded-xl border text-[11px] shadow-2xs ${
+                        item.key === 'facilities'
+                          ? 'border-[#1769AA]/35'
+                          : 'border-[#C8A85D]/55'
+                      }`}
                     >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                            item.key === 'facilities' ? 'bg-[#1769AA]' : 'bg-[#C8A85D]'
-                          }`}
-                        />
-                        <span className="font-bold text-[#0B2341] truncate" title={item.name}>
-                          {item.shortName}
-                        </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              item.key === 'facilities' ? 'bg-[#1769AA]' : 'bg-[#C8A85D]'
+                            }`}
+                          />
+                          <span className="font-extrabold text-[#0B2341] leading-snug" title={item.name}>
+                            {item.shortName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0 tabular-nums" dir="ltr">
+                          <span className="font-black text-xs text-[#0B2341]">
+                            {formatNumber(item.value)}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold ${
+                              item.key === 'facilities'
+                                ? 'bg-[#EAF2FA] text-[#1769AA]'
+                                : 'bg-[#FDF8EC] text-[#9A6700]'
+                            }`}
+                          >
+                            {formatPct(item.sharePct, '0.0%')}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0 tabular-nums" dir="ltr">
-                        <span className="font-extrabold text-[#0B2341]">
-                          {formatNumber(item.value)}
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-500">
-                          ({formatPct(item.sharePct, '0.0%')})
-                        </span>
+                      <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300"
+                          style={{
+                            width: `${Math.max(item.value > 0 ? 6 : 0, Math.min(100, item.sharePct))}%`,
+                            backgroundColor: item.color,
+                          }}
+                        />
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-center text-xs text-slate-400">
+              <div className="flex-1 flex flex-col items-center justify-center text-center text-xs text-slate-400 py-6">
                 <Wrench className="w-7 h-7 text-slate-300 mb-1.5" />
                 <p>أدخل أعداد طلبات الصيانة لعرض توزيع المصادر بيانياً</p>
               </div>
