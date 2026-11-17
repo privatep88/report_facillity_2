@@ -123,7 +123,13 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
     return { total, onlyDraft, pendingApproval, latest };
   }, [draftReports]);
 
-  const getStatusDisplay = (status: ReportListSummary['status']) => {
+  const getStatusDisplay = (status: ReportListSummary['status'], isPostApprovalRevision?: boolean) => {
+    if (status === REPORT_STATUSES.DRAFT && isPostApprovalRevision) {
+      return {
+        label: 'قيد تعديل تقرير معتمد',
+        cls: 'bg-amber-50 text-[#9A7422] border border-[#D5AD5D]/70',
+      };
+    }
     if (status === REPORT_STATUSES.DRAFT) {
       return {
         label: STATUS_LABELS_AR.draft,
@@ -330,7 +336,7 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
                 </tr>
               ) : (
                 filtered.map((r, idx) => {
-                  const badge = getStatusDisplay(r.status);
+                  const badge = getStatusDisplay(r.status, r.isPostApprovalRevision);
                   const isActive = activeReportId === r.id;
                   return (
                     <tr
@@ -343,8 +349,15 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
                             : 'bg-white hover:bg-[#F4F7FB]'
                       }`}
                     >
-                      <td className="py-2.5 px-3 font-mono font-bold text-[#0B2341] tabular-nums" dir="ltr">
-                        {r.reportNumber}
+                      <td className="py-2.5 px-3">
+                        <span className="font-mono font-bold text-[#0B2341] tabular-nums block" dir="ltr">
+                          {r.reportNumber}
+                        </span>
+                        {r.isPostApprovalRevision && r.revisionReason && (
+                          <span className="block text-[10.5px] text-slate-500 mt-0.5 max-w-[220px] truncate" title={r.revisionReason}>
+                            السبب: {r.revisionReason}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-center font-semibold">
                         {getMonthNameAr(r.month)}{' '}
@@ -356,8 +369,15 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
                       <td className="py-2.5 px-3 text-center font-mono text-xs text-slate-600 tabular-nums" dir="ltr">
                         {formatDateWestern(r.updatedAt)}
                       </td>
-                      <td className="py-2.5 px-3 text-center font-mono font-bold tabular-nums" dir="ltr">
-                        v{r.currentVersion}
+                      <td className="py-2.5 px-3 text-center">
+                        <span className="font-mono font-bold tabular-nums block" dir="ltr">
+                          v{r.currentVersion}
+                        </span>
+                        {r.isPostApprovalRevision && r.sourceApprovedVersion && (
+                          <span className="block text-[10px] font-semibold text-[#9A7422] mt-0.5">
+                            مستند على <span dir="ltr" className="font-mono">v{r.sourceApprovedVersion}</span>
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-center tabular-nums text-xs">
                         <span dir="ltr">{formatNumber(r.totalReceived)}</span> طلب ·{' '}
@@ -367,6 +387,11 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
                         <span className={`inline-block px-2.5 py-1 rounded-md text-[11px] font-bold ${badge.cls}`}>
                           {badge.label}
                         </span>
+                        {r.isPostApprovalRevision && r.status !== REPORT_STATUSES.DRAFT && (
+                          <span className="block text-[10px] font-semibold text-[#9A7422] mt-0.5">
+                            تعديل تقرير معتمد
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3">
                         <div className="flex items-center justify-center gap-1.5">

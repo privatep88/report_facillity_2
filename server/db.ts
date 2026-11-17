@@ -24,6 +24,7 @@ import type {
 } from '../src/types/report.ts';
 import { DEFAULT_THRESHOLDS, REPORT_STATUSES, TASK_STATUSES, USER_ROLES } from '../src/types/report.ts';
 import {
+  computeReportMetrics,
   formatDateWestern,
   normalizeDigits,
   parseDisplayDateDDMMYYYY,
@@ -37,6 +38,12 @@ import {
   validateReportCompleteness,
   type ReportValidationResult,
 } from '../src/services/ReportValidationService.ts';
+import {
+  canEditPostApprovalReport,
+  canEditWorkingReport,
+  isAuthorizedPostApprovalOwner,
+} from '../src/utils/postApprovalAccess.ts';
+import { computeReportFieldDiffs } from '../src/utils/reportDiff.ts';
 import { populateReportWithSampleData } from '../src/utils/sampleReportData.ts';
 
 export class DomainError extends Error {
@@ -392,7 +399,7 @@ export function initSchemaAndSeed(): void {
     );
   `);
 
-  // Ensure new signature image & audit metadata columns exist on already-initialized databases
+  // Ensure new signature image, post-approval revision, & concurrency columns exist on already-initialized databases
   const reportCols = db.prepare('PRAGMA table_info(monthly_reports)').all() as Array<{ name: string }>;
   const colNames = new Set(reportCols.map((c) => c.name));
   const missingColumns: Array<[string, string]> = [
@@ -406,12 +413,72 @@ export function initSchemaAndSeed(): void {
     ['approver_signed_by_id', 'TEXT'],
     ['approver_signed_by_name', 'TEXT'],
     ['approver_signature_status', "TEXT NOT NULL DEFAULT 'valid'"],
+    ['is_post_approval_revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ['revision_reason', 'TEXT'],
+    ['revision_started_by_id', 'TEXT'],
+    ['revision_started_by_name', 'TEXT'],
+    ['revision_started_by_role', 'TEXT'],
+    ['revision_started_at', 'TEXT'],
+    ['source_approved_version', 'INTEGER'],
+    ['lock_version', 'INTEGER NOT NULL DEFAULT 1'],
   ];
   for (const [colName, colDef] of missingColumns) {
     if (!colNames.has(colName)) {
       db.exec(`ALTER TABLE monthly_reports ADD COLUMN ${colName} ${colDef};`);
     }
   }
+
+  const versionCols = db.prepare('PRAGMA table_info(report_versions)').all() as Array<{ name: string }>;
+  const verColNames = new Set(versionCols.map((c) => c.name));
+  const missingVerCols: Array<[string, string]> = [
+    ['revision_reason', 'TEXT'],
+    ['source_approved_version', 'INTEGER'],
+    ['edited_by_name', 'TEXT'],
+  ];
+  for (const [colName, colDef] of missingVerCols) {
+    if (!verColNames.has(colName)) {
+      db.exec(`ALTER TABLE report_versions ADD COLUMN ${colName} ${colDef};`);
+    }
+  }
+
+  // Enforce append-only / immutable protection on audit logs, approval records, and version snapshots
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_update
+    BEFORE UPDATE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_logs is immutable and append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_delete
+    BEFORE DELETE ON audit_logs
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_logs is immutable and cannot be deleted');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS prevent_approval_records_update
+    BEFORE UPDATE ON approval_records
+    BEGIN
+      SELECT RAISE(ABORT, 'approval_records is immutable and append-only');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS prevent_approval_records_delete
+    BEFORE DELETE ON approval_records
+    BEGIN
+      SELECT RAISE(ABORT, 'approval_records is immutable and cannot be deleted');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS prevent_report_versions_update
+    BEFORE UPDATE ON report_versions
+    BEGIN
+      SELECT RAISE(ABORT, 'report_versions snapshots are immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS prevent_report_versions_delete
+    BEFORE DELETE ON report_versions
+    BEGIN
+      SELECT RAISE(ABORT, 'report_versions snapshots are immutable and cannot be deleted');
+    END;
+  `);
 
   const now = new Date().toISOString();
 
@@ -894,6 +961,17 @@ export function getReportById(reportId: string): MonthlyReportFull | null {
     classification: String(r.classification),
     status: String(r.status) as ReportStatus,
     currentVersion: Number(r.current_version),
+    isPostApprovalRevision: Number(r.is_post_approval_revision || 0) === 1,
+    revisionReason: r.revision_reason ? String(r.revision_reason) : null,
+    revisionStartedById: r.revision_started_by_id ? String(r.revision_started_by_id) : null,
+    revisionStartedByName: r.revision_started_by_name ? String(r.revision_started_by_name) : null,
+    revisionStartedByRole: r.revision_started_by_role ? String(r.revision_started_by_role) : null,
+    revisionStartedAt: r.revision_started_at ? String(r.revision_started_at) : null,
+    sourceApprovedVersion:
+      r.source_approved_version !== null && r.source_approved_version !== undefined
+        ? Number(r.source_approved_version)
+        : null,
+    lockVersion: Number(r.lock_version || 1),
     preparerId: r.preparer_id ? String(r.preparer_id) : null,
     preparerName: String(r.preparer_name || ''),
     preparerTitle: String(r.preparer_title || ''),
@@ -960,18 +1038,90 @@ export function listReportsSummary(): ReportListSummary[] {
     )
     .all() as Array<Record<string, unknown>>;
 
+  const latestVerStmt = db.prepare(
+    `SELECT version_number, approved_by_name, created_at, snapshot_json
+     FROM report_versions
+     WHERE report_id = ?
+     ORDER BY version_number DESC
+     LIMIT 1`
+  );
+
   return rows.map((r) => {
+    const id = String(r.id);
     const totalReceived = Number(r.total_received) || 0;
     const totalExecuted = Number(r.total_executed) || 0;
     const completionRate = totalReceived > 0 ? Math.round((totalExecuted / totalReceived) * 1000) / 10 : null;
+    const status = String(r.status) as ReportStatus;
+
+    let latestApprovedVersion: number | null = null;
+    let latestApprovedAt: string | null = null;
+    let latestApprovedByName: string | null = null;
+    let latestApprovedPreparedAt: string | null = null;
+    let latestApprovedStatus: ReportStatus | null = null;
+    let latestApprovedTotalReceived: number | null = null;
+    let latestApprovedCompletionRate: number | null = null;
+
+    const verRow = latestVerStmt.get(id) as
+      | {
+          version_number: number;
+          approved_by_name: string;
+          created_at: string;
+          snapshot_json: string;
+        }
+      | undefined;
+
+    if (verRow) {
+      latestApprovedVersion = Number(verRow.version_number);
+      latestApprovedByName = String(verRow.approved_by_name || '');
+      try {
+        const parsed = JSON.parse(verRow.snapshot_json) as {
+          report?: MonthlyReportFull;
+          sites?: MaintenanceSite[];
+          categories?: MaintenanceCategory[];
+          thresholds?: PerformanceThresholds;
+          approvedAt?: string;
+        };
+        const snapRep = parsed.report;
+        latestApprovedAt = snapRep?.approvedAt || parsed.approvedAt || verRow.created_at;
+        latestApprovedPreparedAt = snapRep?.preparedAt || null;
+        latestApprovedByName = snapRep?.approverName || latestApprovedByName;
+        latestApprovedStatus =
+          snapRep?.status === REPORT_STATUSES.ARCHIVED || status === REPORT_STATUSES.ARCHIVED
+            ? REPORT_STATUSES.ARCHIVED
+            : REPORT_STATUSES.APPROVED;
+        if (snapRep) {
+          const snapMetrics = computeReportMetrics(
+            snapRep,
+            parsed.sites || [],
+            parsed.categories || [],
+            parsed.thresholds || DEFAULT_THRESHOLDS
+          );
+          latestApprovedTotalReceived = snapMetrics.totalReceived;
+          latestApprovedCompletionRate = snapMetrics.overallCompletionPct;
+        }
+      } catch {
+        latestApprovedAt = verRow.created_at;
+        latestApprovedStatus = REPORT_STATUSES.APPROVED;
+      }
+    } else if (status === REPORT_STATUSES.APPROVED || status === REPORT_STATUSES.ARCHIVED) {
+      latestApprovedVersion = Number(r.current_version);
+      latestApprovedAt = r.approved_at ? String(r.approved_at) : null;
+      latestApprovedByName = String(r.approver_name || '');
+      latestApprovedPreparedAt = r.prepared_at ? String(r.prepared_at) : null;
+      latestApprovedStatus = status;
+      latestApprovedTotalReceived = totalReceived;
+      latestApprovedCompletionRate = completionRate;
+    }
+
     return {
-      id: String(r.id),
+      id,
       reportNumber: String(r.report_number),
       year: Number(r.year),
       month: Number(r.month),
       department: String(r.department),
-      status: String(r.status) as ReportStatus,
+      status,
       currentVersion: Number(r.current_version),
+      preparerId: r.preparer_id ? String(r.preparer_id) : null,
       preparerName: String(r.preparer_name || ''),
       approverName: String(r.approver_name || ''),
       preparedAt: r.prepared_at ? String(r.prepared_at) : null,
@@ -984,6 +1134,21 @@ export function listReportsSummary(): ReportListSummary[] {
       totalFaults: Number(r.total_faults) || 0,
       totalCostAed: Math.round((Number(r.total_cost_aed) || 0) * 100) / 100,
       versionCount: Number(r.version_count) || 0,
+      isPostApprovalRevision: Number(r.is_post_approval_revision || 0) === 1,
+      revisionReason: r.revision_reason ? String(r.revision_reason) : null,
+      revisionStartedByName: r.revision_started_by_name ? String(r.revision_started_by_name) : null,
+      revisionStartedAt: r.revision_started_at ? String(r.revision_started_at) : null,
+      sourceApprovedVersion:
+        r.source_approved_version !== null && r.source_approved_version !== undefined
+          ? Number(r.source_approved_version)
+          : null,
+      latestApprovedVersion,
+      latestApprovedAt,
+      latestApprovedByName,
+      latestApprovedPreparedAt,
+      latestApprovedStatus,
+      latestApprovedTotalReceived,
+      latestApprovedCompletionRate,
     };
   });
 }
@@ -1176,50 +1341,40 @@ export function createBlankMonthlyReport(params: {
 }
 
 export function saveReportData(reportId: string, payload: MonthlyReportFull, user: AuthUser): MonthlyReportFull {
-  const existing = getReportById(reportId);
-  if (!existing) throw new Error('التقرير غير موجود');
-
-  if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
-    throw new Error('يُمنع تعديل النسخة المعتمدة أو المؤرشفة مباشرة. أنشئ إصداراً جديداً للتصحيح.');
-  }
-  if (existing.status !== REPORT_STATUSES.DRAFT && user.role !== USER_ROLES.ADMIN) {
-    throw new Error('لا يمكن تعديل التقرير بعد تقديمه للمراجعة إلا بعد إرجاعه كمسودة');
-  }
-
-  // Validate services & non-negative counts
+  // Validate services & non-negative counts before opening write transaction
   const seenServiceIds = new Set<string>();
   for (const s of payload.services) {
     if (!s.nameAr || !s.nameAr.trim()) {
-      throw new Error('يجب إدخال اسم الخدمة باللغة العربية لجميع بنود الخدمات');
+      throw new DomainError('يجب إدخال اسم الخدمة باللغة العربية لجميع بنود الخدمات', 400);
     }
     if (s.receivedCount < 0 || s.executedCount < 0) {
-      throw new Error('لا يُسمح بالقيم السالبة في حقول الطلبات');
+      throw new DomainError('لا يُسمح بالقيم السالبة في حقول الطلبات', 400);
     }
     const sid = (s.serviceId || '').trim();
     if (sid && seenServiceIds.has(sid)) {
-      throw new Error('يوجد معرف خدمة مكرر في قائمة الخدمات');
+      throw new DomainError('يوجد معرف خدمة مكرر في قائمة الخدمات', 400);
     }
     if (sid) seenServiceIds.add(sid);
   }
   for (const t of payload.tasks) {
     if (t.completionPct < 0 || t.completionPct > 100) {
-      throw new Error('نسبة إنجاز المهمة يجب أن تكون بين 0 و 100');
+      throw new DomainError('نسبة إنجاز المهمة يجب أن تكون بين 0 و 100', 400);
     }
     if (t.status === TASK_STATUSES.COMPLETED && (!t.topic.trim() && !t.taskName.trim())) {
-      throw new Error('لا يمكن اعتبار صف فارغ مهمة مكتملة');
+      throw new DomainError('لا يمكن اعتبار صف فارغ مهمة مكتملة', 400);
     }
   }
   const seenSecurityKeys = new Set<string>();
   for (const sr of payload.securityReception || []) {
     if (!sr.nameAr || !sr.nameAr.trim()) {
-      throw new Error('يجب إدخال مسمى البيان لجميع أعمدة خدمات الأمن والاستقبال');
+      throw new DomainError('يجب إدخال مسمى البيان لجميع أعمدة خدمات الأمن والاستقبال', 400);
     }
     if (sr.receivedCount < 0 || sr.executedCount < 0) {
-      throw new Error('لا يُسمح بالقيم السالبة في حقول خدمات الأمن والاستقبال');
+      throw new DomainError('لا يُسمح بالقيم السالبة في حقول خدمات الأمن والاستقبال', 400);
     }
     const key = (sr.activityKey || '').trim();
     if (key && seenSecurityKeys.has(key)) {
-      throw new Error('يوجد معرف مكرر في أعمدة خدمات الأمن والاستقبال');
+      throw new DomainError('يوجد معرف مكرر في أعمدة خدمات الأمن والاستقبال', 400);
     }
     if (key) seenSecurityKeys.add(key);
   }
@@ -1228,11 +1383,44 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
   // so draft/payload edits can never spoof or alter persisted electronic signatures.
   const sanitizedPreparedAt = sanitizeReportDate(payload.preparedAt);
   const sanitizedApprovedAt = sanitizeReportDate(payload.approvedAt);
-
   const now = new Date().toISOString();
+  const syncedPayload = syncReceptionServiceWithSecurity(payload);
+  const sitesList = getAllSites();
+  const categoriesList = getAllCategories();
+
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(
+    const existing = getReportById(reportId);
+    if (!existing) throw new DomainError('التقرير غير موجود', 404);
+
+    if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
+      throw new DomainError('يُمنع تعديل النسخة المعتمدة أو المؤرشفة مباشرة. استخدم «تحرير التقرير بعد الاعتماد» لفتح إصدار جديد.', 403);
+    }
+    if (existing.status !== REPORT_STATUSES.DRAFT && user.role !== USER_ROLES.ADMIN) {
+      throw new DomainError('لا يمكن تعديل التقرير بعد تقديمه للمراجعة إلا بعد إرجاعه كمسودة', 403);
+    }
+    if (existing.isPostApprovalRevision && !isAuthorizedPostApprovalOwner(user, existing)) {
+      throw new DomainError('ليس لديك صلاحية تعديل هذا التقرير المعتمد', 403);
+    }
+    if (!canEditWorkingReport(user, existing)) {
+      throw new DomainError('ليس لديك صلاحية تعديل هذا التقرير', 403);
+    }
+
+    // Optimistic Concurrency Check (prevents concurrent editors overwriting each other silently)
+    const expectedLock = payload.expectedLockVersion ?? payload.lockVersion;
+    if (
+      expectedLock !== undefined &&
+      expectedLock !== null &&
+      Number.isFinite(Number(expectedLock)) &&
+      Number(expectedLock) !== Number(existing.lockVersion ?? 1)
+    ) {
+      throw new DomainError(
+        'تم حفظ تعديلات أحدث على هذا التقرير من مستخدم أو جلسة أخرى. يرجى تحديث الصفحة ومراجعة آخر نسخة قبل الحفظ لتجنب تعارض البيانات.',
+        409
+      );
+    }
+
+    const updHeader = db.prepare(
       `UPDATE monthly_reports SET
         classification = ?,
         preparer_name = ?,
@@ -1243,8 +1431,9 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
         approved_at = ?,
         maint_from_facilities = ?,
         maint_from_other = ?,
+        lock_version = COALESCE(lock_version, 1) + 1,
         updated_at = ?
-      WHERE id = ?`
+      WHERE id = ? AND COALESCE(lock_version, 1) = ?`
     ).run(
       payload.classification || 'Public',
       payload.preparerName || '',
@@ -1256,10 +1445,12 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
       Math.max(0, Math.round(Number(payload.maintenanceServices.fromFacilitiesDept) || 0)),
       Math.max(0, Math.round(Number(payload.maintenanceServices.fromOtherDepts) || 0)),
       now,
-      reportId
+      reportId,
+      Number(existing.lockVersion ?? 1)
     );
-
-    const syncedPayload = syncReceptionServiceWithSecurity(payload);
+    if (Number(updHeader.changes) === 0) {
+      throw new DomainError('تغير إصدار القفل المتزامن للتقرير أثناء الحفظ. أعد تحميل الصفحة وحاول مجدداً.', 409);
+    }
 
     db.prepare('DELETE FROM service_metrics WHERE report_id = ?').run(reportId);
     const insSvc = db.prepare(
@@ -1403,23 +1594,72 @@ export function saveReportData(reportId: string, payload: MonthlyReportFull, use
       );
     });
 
-    db.prepare(
+    const diffs = computeReportFieldDiffs(existing, {
+      ...syncedPayload,
+      preparedAt: sanitizedPreparedAt,
+      approvedAt: sanitizedApprovedAt,
+    }, sitesList, categoriesList);
+
+    const insertAudit = db.prepare(
       'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      crypto.randomUUID(),
-      reportId,
-      user.id,
-      user.fullName,
-      user.role,
-      'حفظ وتحديث بيانات التقرير',
-      'monthly_reports',
-      existing.updatedAt,
-      now,
-      'تحديث البيانات التشغيلية في المسودة',
-      existing.currentVersion,
-      existing.status,
-      now
     );
+    const reasonPrefix = existing.isPostApprovalRevision && existing.revisionReason
+      ? `تعديل ما بعد الاعتماد (${existing.revisionReason})`
+      : 'تحديث البيانات التشغيلية في المسودة';
+
+    if (diffs.length === 0) {
+      insertAudit.run(
+        crypto.randomUUID(),
+        reportId,
+        user.id,
+        user.fullName,
+        user.role,
+        'حفظ بيانات التقرير',
+        'monthly_reports',
+        existing.updatedAt,
+        now,
+        reasonPrefix,
+        existing.currentVersion,
+        existing.status,
+        now
+      );
+    } else {
+      const cappedDiffs = diffs.slice(0, 60);
+      for (const d of cappedDiffs) {
+        insertAudit.run(
+          crypto.randomUUID(),
+          reportId,
+          user.id,
+          user.fullName,
+          user.role,
+          `تعديل حقل: ${d.fieldLabel}`,
+          d.fieldPath,
+          d.previousValue,
+          d.newValue,
+          reasonPrefix,
+          existing.currentVersion,
+          existing.status,
+          now
+        );
+      }
+      if (diffs.length > 60) {
+        insertAudit.run(
+          crypto.randomUUID(),
+          reportId,
+          user.id,
+          user.fullName,
+          user.role,
+          'تعديلات إضافية محفوظة',
+          'monthly_reports',
+          `${diffs.length} حقول معدّلة`,
+          'مكتمل',
+          reasonPrefix,
+          existing.currentVersion,
+          existing.status,
+          now
+        );
+      }
+    }
 
     db.exec('COMMIT');
   } catch (err) {
@@ -1484,30 +1724,36 @@ export function saveReportDate(params: {
   user: AuthUser;
 }): MonthlyReportFull {
   const existing = getReportById(params.reportId);
-  if (!existing) throw new Error('التقرير غير موجود');
+  if (!existing) throw new DomainError('التقرير غير موجود', 404);
 
   if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
-    throw new Error('يُمنع تعديل تواريخ النسخة المعتمدة أو المؤرشفة مباشرة');
+    throw new DomainError('يُمنع تعديل تواريخ النسخة المعتمدة أو المؤرشفة مباشرة', 403);
   }
 
   const { user, target } = params;
   const isDraft = existing.status === REPORT_STATUSES.DRAFT;
 
   if (target === 'preparedAt') {
-    const allowed = user.role === USER_ROLES.ADMIN || (user.role === USER_ROLES.PREPARER && isDraft);
+    const allowed =
+      user.role === USER_ROLES.ADMIN ||
+      (user.role === USER_ROLES.PREPARER &&
+        isDraft &&
+        (!existing.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, existing)));
     if (!allowed) {
-      throw new Error('لا تملك صلاحية تعديل تاريخ التقديم في هذه المرحلة');
+      throw new DomainError('لا تملك صلاحية تعديل تاريخ التقديم في هذه المرحلة', 403);
     }
   } else if (target === 'approvedAt') {
     const allowed =
       user.role === USER_ROLES.ADMIN ||
       user.role === USER_ROLES.APPROVER ||
-      (user.role === USER_ROLES.PREPARER && isDraft);
+      (user.role === USER_ROLES.PREPARER &&
+        isDraft &&
+        (!existing.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, existing)));
     if (!allowed) {
-      throw new Error('لا تملك صلاحية تعديل تاريخ الاعتماد في هذه المرحلة');
+      throw new DomainError('لا تملك صلاحية تعديل تاريخ الاعتماد في هذه المرحلة', 403);
     }
   } else {
-    throw new Error('حقل التاريخ غير صالح');
+    throw new DomainError('حقل التاريخ غير صالح', 400);
   }
 
   const sanitized = sanitizeReportDate(params.dateValue);
@@ -1517,7 +1763,7 @@ export function saveReportDate(params: {
 
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(`UPDATE monthly_reports SET ${column} = ?, updated_at = ? WHERE id = ?`).run(
+    db.prepare(`UPDATE monthly_reports SET ${column} = ?, lock_version = COALESCE(lock_version, 1) + 1, updated_at = ? WHERE id = ?`).run(
       sanitized,
       now,
       params.reportId
@@ -1567,7 +1813,11 @@ export function saveReportSignature(params: {
   const isDraft = existing.status === REPORT_STATUSES.DRAFT;
 
   if (target === 'preparer') {
-    const allowed = user.role === USER_ROLES.ADMIN || (user.role === USER_ROLES.PREPARER && isDraft);
+    const allowed =
+      user.role === USER_ROLES.ADMIN ||
+      (user.role === USER_ROLES.PREPARER &&
+        isDraft &&
+        (!existing.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, existing)));
     if (!allowed) {
       throw new DomainError('لا تملك صلاحية تعديل توقيع معد التقرير في هذه المرحلة', 403);
     }
@@ -1620,6 +1870,7 @@ export function saveReportSignature(params: {
           preparer_signed_by_id = ?,
           preparer_signed_by_name = ?,
           preparer_signature_status = 'valid',
+          lock_version = COALESCE(lock_version, 1) + 1,
           updated_at = ?
         WHERE id = ?`
       ).run(
@@ -1642,6 +1893,7 @@ export function saveReportSignature(params: {
           approver_signature_status = 'valid',
           approver_name = CASE WHEN TRIM(approver_name) = '' THEN ? ELSE approver_name END,
           approver_title = CASE WHEN TRIM(approver_title) = '' THEN ? ELSE approver_title END,
+          lock_version = COALESCE(lock_version, 1) + 1,
           updated_at = ?
         WHERE id = ?`
       ).run(
@@ -1683,13 +1935,167 @@ export function saveReportSignature(params: {
   return getReportById(params.reportId)!;
 }
 
+function ensureImmutableApprovedSnapshot(report: MonthlyReportFull, actingUser: AuthUser): void {
+  const existingRow = db
+    .prepare('SELECT id FROM report_versions WHERE report_id = ? AND version_number = ?')
+    .get(report.id, report.currentVersion) as { id: string } | undefined;
+  if (existingRow) return;
+
+  const sites = getAllSites();
+  const categories = getAllCategories();
+  const thresholds = getThresholds();
+  const sigToken =
+    report.approverSignatureHash ||
+    createSignatureToken(report.approverId || actingUser.id, report.id, report.currentVersion, 'approve');
+  const snapshotPayload = {
+    report,
+    sites,
+    categories,
+    thresholds,
+    approvedAt: report.approvedAt || report.updatedAt,
+    preparerSignedAt: report.preparerSignedAt ?? report.preparedAt,
+    approverSignedAt: report.approverSignedAt ?? report.approvedAt,
+    approvedBy: {
+      id: report.approverId || actingUser.id,
+      fullName: report.approverName || actingUser.fullName,
+      jobTitle: report.approverTitle || actingUser.jobTitle,
+    },
+    signatureToken: sigToken,
+  };
+  db.prepare(
+    `INSERT INTO report_versions
+      (id, report_id, version_number, snapshot_json, approved_by_id, approved_by_name, signature_token, created_at, revision_reason, source_approved_version, edited_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    crypto.randomUUID(),
+    report.id,
+    report.currentVersion,
+    JSON.stringify(snapshotPayload),
+    report.approverId || actingUser.id,
+    report.approverName || actingUser.fullName,
+    sigToken,
+    report.approvedAt || report.updatedAt,
+    report.revisionReason ?? null,
+    report.sourceApprovedVersion ?? null,
+    report.revisionStartedByName ?? report.preparerName ?? null
+  );
+}
+
+function restoreReportChildrenFromSnapshot(reportId: string, snapReport: MonthlyReportFull): void {
+  db.prepare('DELETE FROM service_metrics WHERE report_id = ?').run(reportId);
+  const insSvc = db.prepare(
+    'INSERT INTO service_metrics (id, report_id, service_id, sort_order, summary_order, name_ar, name_en, received_count, executed_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  snapReport.services.forEach((s, idx) => {
+    insSvc.run(
+      `${reportId}_${s.serviceId}`,
+      reportId,
+      s.serviceId,
+      s.sortOrder ?? idx + 1,
+      s.summaryOrder ?? idx + 1,
+      s.nameAr,
+      s.nameEn || s.nameAr,
+      s.receivedCount,
+      s.executedCount
+    );
+  });
+
+  db.prepare('DELETE FROM contracts_licenses WHERE report_id = ?').run(reportId);
+  const insCon = db.prepare(
+    'INSERT INTO contracts_licenses (id, report_id, group_key, name_ar, name_en, active_count, inactive_count, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const c of snapReport.contracts) {
+    insCon.run(`${reportId}_${c.groupKey}`, reportId, c.groupKey, c.nameAr, c.nameEn, c.activeCount, c.inactiveCount, c.notes || '');
+  }
+
+  db.prepare('DELETE FROM safety_metrics WHERE report_id = ?').run(reportId);
+  const insSaf = db.prepare(
+    'INSERT INTO safety_metrics (id, report_id, group_key, name_ar, name_en, primary_label_ar, primary_label_en, secondary_label_ar, secondary_label_en, primary_count, secondary_count, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const sf of snapReport.safety) {
+    insSaf.run(
+      `${reportId}_${sf.groupKey}`,
+      reportId,
+      sf.groupKey,
+      sf.nameAr,
+      sf.nameEn,
+      sf.primaryLabelAr,
+      sf.primaryLabelEn,
+      sf.secondaryLabelAr,
+      sf.secondaryLabelEn,
+      sf.primaryCount,
+      sf.secondaryCount,
+      sf.notes || ''
+    );
+  }
+
+  db.prepare('DELETE FROM maintenance_records WHERE report_id = ?').run(reportId);
+  const insMaint = db.prepare(
+    'INSERT INTO maintenance_records (id, report_id, site_id, category_id, fault_count) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const [siteId, catMap] of Object.entries(snapReport.maintenanceMatrix || {})) {
+    for (const [catId, count] of Object.entries(catMap || {})) {
+      insMaint.run(`${reportId}_${siteId}_${catId}`, reportId, siteId, catId, Number(count) || 0);
+    }
+  }
+
+  db.prepare('DELETE FROM maintenance_costs WHERE report_id = ?').run(reportId);
+  const insCost = db.prepare(
+    'INSERT INTO maintenance_costs (id, report_id, category_id, petty_cash_aed, purchase_order_aed) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const [catId, entry] of Object.entries(snapReport.maintenanceCosts || {})) {
+    insCost.run(`${reportId}_cost_${catId}`, reportId, catId, Number(entry.pettyCashAed) || 0, Number(entry.purchaseOrderAed) || 0);
+  }
+
+  db.prepare('DELETE FROM logistics_metrics WHERE report_id = ?').run(reportId);
+  const insLog = db.prepare(
+    'INSERT INTO logistics_metrics (id, report_id, channel_key, name_ar, name_en, request_count, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const l of snapReport.logistics) {
+    insLog.run(`${reportId}_${l.channelKey}`, reportId, l.channelKey, l.nameAr, l.nameEn, l.requestCount, l.sortOrder);
+  }
+
+  db.prepare('DELETE FROM reception_metrics WHERE report_id = ?').run(reportId);
+  const insRec = db.prepare(
+    'INSERT INTO reception_metrics (id, report_id, activity_key, name_ar, name_en, received_count, executed_count, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const sr of snapReport.securityReception) {
+    insRec.run(`${reportId}_${sr.activityKey}`, reportId, sr.activityKey, sr.nameAr, sr.nameEn, sr.receivedCount, sr.executedCount, sr.sortOrder);
+  }
+
+  db.prepare('DELETE FROM tasks WHERE report_id = ?').run(reportId);
+  const insTask = db.prepare(
+    'INSERT INTO tasks (id, report_id, row_order, topic, task_name, status, completion_pct) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  snapReport.tasks.forEach((t, idx) => {
+    insTask.run(t.id || crypto.randomUUID(), reportId, t.rowOrder ?? idx + 1, t.topic, t.taskName, t.status, t.completionPct);
+  });
+
+  db.prepare('DELETE FROM challenges WHERE report_id = ?').run(reportId);
+  const insChal = db.prepare(
+    'INSERT INTO challenges (id, report_id, row_order, challenge_text, update_text, recommendation_text) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  snapReport.challenges.forEach((c, idx) => {
+    insChal.run(c.id || crypto.randomUUID(), reportId, c.rowOrder ?? idx + 1, c.challengeText, c.updateText, c.recommendationText);
+  });
+}
+
 export function transitionWorkflow(params: {
   reportId: string;
-  action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision';
+  action:
+    | 'submit_review'
+    | 'start_review'
+    | 'return_revision'
+    | 'forward_approval'
+    | 'approve'
+    | 'archive'
+    | 'create_revision'
+    | 'cancel_revision';
   user: AuthUser;
   comment?: string;
   approverName?: string;
   approverTitle?: string;
+  expectedVersion?: number;
 }): MonthlyReportFull {
   const { user, action, comment = '' } = params;
 
@@ -1701,11 +2107,15 @@ export function transitionWorkflow(params: {
     const now = new Date().toISOString();
     const fromStatus = report.status;
     let toStatus: ReportStatus = fromStatus;
+    let recordedVersion = report.currentVersion;
 
     // Enforce strict RBAC + state machine transitions + Dual Signature Gate
     if (action === 'submit_review') {
       if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER] as UserRole[]).includes(user.role)) {
         throw new DomainError('صلاحية تقديم التقرير للمراجعة مخصصة لمعد التقرير أو مدير النظام فقط', 403);
+      }
+      if (report.isPostApprovalRevision && !isAuthorizedPostApprovalOwner(user, report)) {
+        throw new DomainError('ليس لديك صلاحية إرسال تعديل هذا التقرير المعتمد', 403);
       }
       if (fromStatus !== REPORT_STATUSES.DRAFT) {
         throw new DomainError('يمكن إرسال التقرير للاعتماد من حالة المسودة فقط', 400);
@@ -1873,31 +2283,69 @@ export function transitionWorkflow(params: {
       }
       toStatus = REPORT_STATUSES.ARCHIVED;
     } else if (action === 'create_revision') {
-      if (!([USER_ROLES.ADMIN, USER_ROLES.PREPARER, USER_ROLES.APPROVER] as UserRole[]).includes(user.role)) {
-        throw new DomainError('لا تملك صلاحية فتح إصدار جديد للتصحيح', 403);
+      // STRICT POST-APPROVAL RBAC: ONLY Admin OR original report Preparer (by authenticated UID)
+      if (!isAuthorizedPostApprovalOwner(user, report)) {
+        throw new DomainError('ليس لديك صلاحية تعديل هذا التقرير المعتمد', 403);
       }
-      if (fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
-        throw new DomainError('يُفتح إصدار جديد للتصحيح فقط بعد الاعتماد أو الأرشفة', 400);
+      if (report.isPostApprovalRevision && fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
+        throw new DomainError(
+          `تم فتح إصدار تعديل (v${report.currentVersion}) لهذا التقرير المعتمد مسبقاً؛ استكمل تحريره من مسودات التقارير أو ألغِه أولاً.`,
+          409
+        );
+      }
+      if (!canEditPostApprovalReport(user, report)) {
+        throw new DomainError('يُفتح تعديل ما بعد الاعتماد للتقارير المعتمدة أو المؤرشفة فقط', 400);
+      }
+      if (
+        params.expectedVersion !== undefined &&
+        params.expectedVersion !== null &&
+        Number(params.expectedVersion) !== report.currentVersion
+      ) {
+        throw new DomainError('تغير رقم الإصدار الحالي للتقرير قبل فتح التعديل؛ يرجى تحديث البيانات.', 409);
       }
       if (!comment.trim()) {
-        throw new DomainError('يرجى إدخال سبب فتح الإصدار الجديد', 400);
+        throw new DomainError('يرجى إدخال سبب تعديل التقرير المعتمد', 400);
       }
       toStatus = REPORT_STATUSES.DRAFT;
+      recordedVersion = report.currentVersion + 1;
+    } else if (action === 'cancel_revision') {
+      if (!isAuthorizedPostApprovalOwner(user, report)) {
+        throw new DomainError('ليس لديك صلاحية إلغاء مسودة التعديل لهذا التقرير المعتمد', 403);
+      }
+      if (
+        !report.isPostApprovalRevision ||
+        !report.sourceApprovedVersion ||
+        fromStatus === REPORT_STATUSES.APPROVED ||
+        fromStatus === REPORT_STATUSES.ARCHIVED
+      ) {
+        throw new DomainError('لا توجد مسودة تعديل نشطة بعد الاعتماد لإلغائها', 400);
+      }
+      toStatus = REPORT_STATUSES.APPROVED;
+      recordedVersion = report.sourceApprovedVersion;
     }
 
-    const sigToken = createSignatureToken(user.id, report.id, report.currentVersion, action);
+    const sigToken = createSignatureToken(user.id, report.id, recordedVersion, action);
 
     if (action === 'submit_review') {
       const effectivePreparedAt = report.preparedAt || now;
       db.prepare(
-        'UPDATE monthly_reports SET status = ?, preparer_id = ?, prepared_at = ?, preparer_signature_hash = ?, updated_at = ? WHERE id = ?'
+        `UPDATE monthly_reports
+         SET status = ?,
+             preparer_id = COALESCE(NULLIF(TRIM(preparer_id), ''), ?),
+             prepared_at = ?,
+             preparer_signature_hash = ?,
+             lock_version = COALESCE(lock_version, 1) + 1,
+             updated_at = ?
+         WHERE id = ?`
       ).run(toStatus, user.id, effectivePreparedAt, sigToken, now, report.id);
     } else if (action === 'start_review' || action === 'forward_approval') {
       db.prepare(
-        'UPDATE monthly_reports SET status = ?, reviewer_id = ?, reviewer_name = ?, reviewer_title = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
+        'UPDATE monthly_reports SET status = ?, reviewer_id = ?, reviewer_name = ?, reviewer_title = ?, reviewed_at = ?, lock_version = COALESCE(lock_version, 1) + 1, updated_at = ? WHERE id = ?'
       ).run(toStatus, user.id, user.fullName, user.jobTitle, now, now, report.id);
     } else if (action === 'return_revision') {
-      db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, lock_version = COALESCE(lock_version, 1) + 1, updated_at = ? WHERE id = ?'
+      ).run(toStatus, now, report.id);
     } else if (action === 'approve') {
       const effectiveApprovedAt = report.approvedAt || now;
       const effectiveApproverName = (params.approverName ?? report.approverName).trim() || user.fullName;
@@ -1905,7 +2353,15 @@ export function transitionWorkflow(params: {
       const updRes = db
         .prepare(
           `UPDATE monthly_reports
-           SET status = ?, approver_id = ?, approver_name = ?, approver_title = ?, approved_at = ?, approver_signature_hash = ?, updated_at = ?
+           SET status = ?,
+               approver_id = ?,
+               approver_name = ?,
+               approver_title = ?,
+               approved_at = ?,
+               approver_signature_hash = ?,
+               is_post_approval_revision = 0,
+               lock_version = COALESCE(lock_version, 1) + 1,
+               updated_at = ?
            WHERE id = ? AND status IN ('pending_approval', 'ready_for_review', 'under_review')`
         )
         .run(
@@ -1922,7 +2378,7 @@ export function transitionWorkflow(params: {
         throw new DomainError('تغيرت حالة التقرير أثناء التنفيذ ولا يمكن إتمام الاعتماد المكرر', 409);
       }
 
-      // Build immutable official snapshot preserving BOTH electronic signatures & timestamps
+      // Build immutable official snapshot preserving BOTH fresh electronic signatures & revision origin metadata
       const updatedForSnapshot = getReportById(report.id)!;
       const sites = getAllSites();
       const categories = getAllCategories();
@@ -1937,9 +2393,13 @@ export function transitionWorkflow(params: {
         approverSignedAt: updatedForSnapshot.approverSignedAt ?? effectiveApprovedAt,
         approvedBy: { id: user.id, fullName: effectiveApproverName, jobTitle: effectiveApproverTitle },
         signatureToken: sigToken,
+        revisionReason: report.revisionReason ?? null,
+        sourceApprovedVersion: report.sourceApprovedVersion ?? null,
       };
       db.prepare(
-        'INSERT INTO report_versions (id, report_id, version_number, snapshot_json, approved_by_id, approved_by_name, signature_token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        `INSERT INTO report_versions
+          (id, report_id, version_number, snapshot_json, approved_by_id, approved_by_name, signature_token, created_at, revision_reason, source_approved_version, edited_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         crypto.randomUUID(),
         report.id,
@@ -1948,15 +2408,41 @@ export function transitionWorkflow(params: {
         user.id,
         effectiveApproverName,
         sigToken,
-        now
+        now,
+        report.revisionReason ?? null,
+        report.sourceApprovedVersion ?? null,
+        report.revisionStartedByName ?? report.preparerName ?? null
       );
     } else if (action === 'archive') {
-      db.prepare('UPDATE monthly_reports SET status = ?, updated_at = ? WHERE id = ?').run(toStatus, now, report.id);
+      db.prepare(
+        'UPDATE monthly_reports SET status = ?, lock_version = COALESCE(lock_version, 1) + 1, updated_at = ? WHERE id = ?'
+      ).run(toStatus, now, report.id);
     } else if (action === 'create_revision') {
+      // Preserve immutable approved snapshot BEFORE opening new revision draft
+      ensureImmutableApprovedSnapshot(report, user);
+
+      // Reset BOTH preparer AND approver signatures & dates on the new active revision draft
       db.prepare(
         `UPDATE monthly_reports
          SET status = ?,
              current_version = current_version + 1,
+             is_post_approval_revision = 1,
+             revision_reason = ?,
+             revision_started_by_id = ?,
+             revision_started_by_name = ?,
+             revision_started_by_role = ?,
+             revision_started_at = ?,
+             source_approved_version = ?,
+             preparer_signature_hash = NULL,
+             preparer_signature_image = NULL,
+             preparer_signed_at = NULL,
+             preparer_signed_by_id = NULL,
+             preparer_signed_by_name = NULL,
+             preparer_signature_status = 'valid',
+             reviewer_id = NULL,
+             reviewer_name = '',
+             reviewer_title = '',
+             reviewed_at = NULL,
              approved_at = NULL,
              approver_signature_hash = NULL,
              approver_signature_image = NULL,
@@ -1964,9 +2450,114 @@ export function transitionWorkflow(params: {
              approver_signed_by_id = NULL,
              approver_signed_by_name = NULL,
              approver_signature_status = 'valid',
+             lock_version = COALESCE(lock_version, 1) + 1,
              updated_at = ?
          WHERE id = ?`
-      ).run(toStatus, now, report.id);
+      ).run(
+        toStatus,
+        comment.trim(),
+        user.id,
+        user.fullName,
+        user.role,
+        now,
+        report.currentVersion,
+        now,
+        report.id
+      );
+    } else if (action === 'cancel_revision') {
+      const snapRow = db
+        .prepare('SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version_number = ?')
+        .get(report.id, report.sourceApprovedVersion!) as { snapshot_json: string } | undefined;
+      if (!snapRow) {
+        throw new DomainError('تعذر العثور على النسخة المعتمدة المرجعية لاستعادتها', 404);
+      }
+      const parsed = JSON.parse(snapRow.snapshot_json) as { report: MonthlyReportFull };
+      const snapReport = parsed.report;
+      toStatus = snapReport.status === REPORT_STATUSES.ARCHIVED ? REPORT_STATUSES.ARCHIVED : REPORT_STATUSES.APPROVED;
+      recordedVersion = snapReport.currentVersion;
+
+      db.prepare(
+        `UPDATE monthly_reports
+         SET status = ?,
+             current_version = ?,
+             classification = ?,
+             preparer_id = ?,
+             preparer_name = ?,
+             preparer_title = ?,
+             prepared_at = ?,
+             preparer_signature_hash = ?,
+             preparer_signature_image = ?,
+             preparer_signed_at = ?,
+             preparer_signed_by_id = ?,
+             preparer_signed_by_name = ?,
+             preparer_signature_status = ?,
+             reviewer_id = ?,
+             reviewer_name = ?,
+             reviewer_title = ?,
+             reviewed_at = ?,
+             approver_id = ?,
+             approver_name = ?,
+             approver_title = ?,
+             approved_at = ?,
+             approver_signature_hash = ?,
+             approver_signature_image = ?,
+             approver_signed_at = ?,
+             approver_signed_by_id = ?,
+             approver_signed_by_name = ?,
+             approver_signature_status = ?,
+             maint_from_facilities = ?,
+             maint_from_other = ?,
+             is_post_approval_revision = 0,
+             revision_reason = ?,
+             revision_started_by_id = ?,
+             revision_started_by_name = ?,
+             revision_started_by_role = ?,
+             revision_started_at = ?,
+             source_approved_version = ?,
+             lock_version = COALESCE(lock_version, 1) + 1,
+             updated_at = ?
+         WHERE id = ?`
+      ).run(
+        toStatus,
+        snapReport.currentVersion,
+        snapReport.classification || 'Public',
+        snapReport.preparerId,
+        snapReport.preparerName,
+        snapReport.preparerTitle,
+        snapReport.preparedAt,
+        snapReport.preparerSignatureHash,
+        snapReport.preparerSignatureImage,
+        snapReport.preparerSignedAt ?? null,
+        snapReport.preparerSignedById ?? null,
+        snapReport.preparerSignedByName ?? null,
+        snapReport.preparerSignatureStatus ?? 'valid',
+        snapReport.reviewerId,
+        snapReport.reviewerName,
+        snapReport.reviewerTitle,
+        snapReport.reviewedAt,
+        snapReport.approverId,
+        snapReport.approverName,
+        snapReport.approverTitle,
+        snapReport.approvedAt,
+        snapReport.approverSignatureHash,
+        snapReport.approverSignatureImage,
+        snapReport.approverSignedAt ?? null,
+        snapReport.approverSignedById ?? null,
+        snapReport.approverSignedByName ?? null,
+        snapReport.approverSignatureStatus ?? 'valid',
+        Math.max(0, Math.round(Number(snapReport.maintenanceServices?.fromFacilitiesDept) || 0)),
+        Math.max(0, Math.round(Number(snapReport.maintenanceServices?.fromOtherDepts) || 0)),
+        snapReport.revisionReason ?? null,
+        snapReport.revisionStartedById ?? null,
+        snapReport.revisionStartedByName ?? null,
+        snapReport.revisionStartedByRole ?? null,
+        snapReport.revisionStartedAt ?? null,
+        snapReport.sourceApprovedVersion ?? null,
+        now,
+        report.id
+      );
+
+      restoreReportChildrenFromSnapshot(report.id, snapReport);
     }
 
     db.prepare(
@@ -1974,7 +2565,7 @@ export function transitionWorkflow(params: {
     ).run(
       crypto.randomUUID(),
       report.id,
-      report.currentVersion,
+      recordedVersion,
       action,
       fromStatus,
       toStatus,
@@ -1986,6 +2577,17 @@ export function transitionWorkflow(params: {
       now
     );
 
+    const actionLabels: Record<string, string> = {
+      submit_review: 'إرسال التقرير للاعتماد',
+      start_review: 'بدء المراجعة الرسمية',
+      forward_approval: 'رفع التقرير للاعتماد',
+      return_revision: 'إرجاع التقرير للتعديل',
+      approve: 'اعتماد التقرير رسمياً',
+      archive: 'أرشفة التقرير',
+      create_revision: 'فتح تحرير التقرير بعد الاعتماد',
+      cancel_revision: 'إلغاء مسودة التعديل بعد الاعتماد',
+    };
+
     db.prepare(
       'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
@@ -1994,13 +2596,75 @@ export function transitionWorkflow(params: {
       user.id,
       user.fullName,
       user.role,
-      `تغيير حالة التقرير (${action})`,
-      'status',
-      fromStatus,
-      toStatus,
+      actionLabels[action] || `تغيير حالة التقرير (${action})`,
+      action === 'create_revision' ? 'post_approval_edit' : 'status',
+      action === 'create_revision' ? `v${report.currentVersion} (${fromStatus})` : fromStatus,
+      action === 'create_revision'
+        ? `v${recordedVersion} (قيد تعديل تقرير معتمد)`
+        : action === 'cancel_revision'
+          ? `v${recordedVersion} (${toStatus})`
+          : toStatus,
       comment || `توقيع إلكتروني موثق: ${sigToken}`,
-      report.currentVersion,
-      toStatus,
+      recordedVersion,
+      action === 'create_revision' ? 'post_approval_revision' : toStatus,
+      now
+    );
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getReportById(params.reportId)!;
+}
+
+export function linkReportPreparerOwnership(params: {
+  reportId: string;
+  preparerId: string;
+  adminUser: AuthUser;
+}): MonthlyReportFull {
+  if (params.adminUser.role !== USER_ROLES.ADMIN) {
+    throw new DomainError('صلاحية ربط ملكية معد التقرير مخصصة لمدير النظام فقط', 403);
+  }
+  const targetUser = db
+    .prepare('SELECT id, full_name, job_title, role_key, is_active FROM users WHERE id = ?')
+    .get(params.preparerId) as
+    | { id: string; full_name: string; job_title: string; role_key: string; is_active: number }
+    | undefined;
+  if (!targetUser || targetUser.is_active !== 1) {
+    throw new DomainError('حساب معد التقرير المحدد غير موجود أو موقوف', 404);
+  }
+
+  const now = new Date().toISOString();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const existing = getReportById(params.reportId);
+    if (!existing) throw new DomainError('التقرير غير موجود', 404);
+
+    db.prepare(
+      `UPDATE monthly_reports
+       SET preparer_id = ?,
+           lock_version = COALESCE(lock_version, 1) + 1,
+           updated_at = ?
+       WHERE id = ?`
+    ).run(targetUser.id, now, params.reportId);
+
+    db.prepare(
+      'INSERT INTO audit_logs (id, report_id, user_id, user_name, user_role, action, field_path, previous_value, new_value, reason, version_number, report_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      crypto.randomUUID(),
+      params.reportId,
+      params.adminUser.id,
+      params.adminUser.fullName,
+      params.adminUser.role,
+      'ربط ملكية معد التقرير (UID)',
+      'preparerId',
+      existing.preparerId || 'غير مرتبط',
+      `${targetUser.id} (${targetUser.full_name})`,
+      'توثيق معرف معد التقرير من قبل مدير النظام',
+      existing.currentVersion,
+      existing.status,
       now
     );
 
@@ -2038,7 +2702,7 @@ export function getReportHistory(reportId: string): {
   }));
 
   const auditLogs = (
-    db.prepare('SELECT * FROM audit_logs WHERE report_id = ? ORDER BY created_at DESC LIMIT 150').all(reportId) as Array<
+    db.prepare('SELECT * FROM audit_logs WHERE report_id = ? ORDER BY created_at DESC LIMIT 250').all(reportId) as Array<
       Record<string, unknown>
     >
   ).map((l) => ({
@@ -2060,7 +2724,7 @@ export function getReportHistory(reportId: string): {
   const versions = (
     db
       .prepare(
-        'SELECT id, report_id, version_number, approved_by_id, approved_by_name, signature_token, created_at FROM report_versions WHERE report_id = ? ORDER BY version_number DESC'
+        'SELECT id, report_id, version_number, approved_by_id, approved_by_name, signature_token, created_at, revision_reason, source_approved_version, edited_by_name FROM report_versions WHERE report_id = ? ORDER BY version_number DESC'
       )
       .all(reportId) as Array<Record<string, unknown>>
   ).map((v) => ({
@@ -2071,6 +2735,12 @@ export function getReportHistory(reportId: string): {
     approvedByName: String(v.approved_by_name),
     signatureToken: String(v.signature_token),
     createdAt: String(v.created_at),
+    revisionReason: v.revision_reason ? String(v.revision_reason) : null,
+    sourceApprovedVersion:
+      v.source_approved_version !== null && v.source_approved_version !== undefined
+        ? Number(v.source_approved_version)
+        : null,
+    editedByName: v.edited_by_name ? String(v.edited_by_name) : null,
   }));
 
   return { approvals, auditLogs, versions };

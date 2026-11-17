@@ -23,6 +23,7 @@ import {
   Coins,
   Eye,
   FileCheck2,
+  FilePenLine,
   FileSpreadsheet,
   FileText,
   Flame,
@@ -77,6 +78,11 @@ import {
   isLogisticsServiceRow,
 } from '../utils/calculations.ts';
 import { evaluateDualSignatureApproval } from '../utils/signatureValidation.ts';
+import {
+  canEditPostApprovalReport,
+  canEditWorkingReport,
+  isAuthorizedPostApprovalOwner,
+} from '../utils/postApprovalAccess.ts';
 import { getServiceVisual } from '../utils/serviceVisuals.tsx';
 import { NumericInput } from './NumericInput.tsx';
 import { LogisticsHorizontalChart } from './LogisticsHorizontalChart.tsx';
@@ -151,6 +157,7 @@ interface MonthlyReportTabProps {
       | 'approve'
       | 'archive'
       | 'create_revision'
+      | 'cancel_revision'
   ) => void;
   onOpenAuthModal: () => void;
   onNavigateToField: (sectionId: string, fieldId: string) => void;
@@ -224,28 +231,37 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
     [report, visibleSites, categories, thresholds]
   );
 
+  const isApprovedOrArchived =
+    report.status === REPORT_STATUSES.APPROVED || report.status === REPORT_STATUSES.ARCHIVED;
+
   const isLocked =
-    report.status === REPORT_STATUSES.APPROVED ||
-    report.status === REPORT_STATUSES.ARCHIVED ||
-    (report.status !== REPORT_STATUSES.DRAFT && user?.role !== USER_ROLES.ADMIN);
+    isApprovedOrArchived ||
+    (report.status !== REPORT_STATUSES.DRAFT && user?.role !== USER_ROLES.ADMIN) ||
+    (Boolean(report.isPostApprovalRevision) && !isAuthorizedPostApprovalOwner(user, report));
 
   const canEdit =
     !isLocked &&
-    (!user || user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.PREPARER);
+    (user ? canEditWorkingReport(user, report) : !report.isPostApprovalRevision);
 
   const canSignPreparer =
-    report.status !== REPORT_STATUSES.APPROVED &&
-    report.status !== REPORT_STATUSES.ARCHIVED &&
+    !isApprovedOrArchived &&
     !!user &&
     (user.role === USER_ROLES.ADMIN ||
-      (user.role === USER_ROLES.PREPARER && report.status === REPORT_STATUSES.DRAFT));
+      (user.role === USER_ROLES.PREPARER &&
+        report.status === REPORT_STATUSES.DRAFT &&
+        (!report.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, report))));
 
   // STRICT RBAC: Only ADMIN or APPROVER can sign/modify/delete the Approver signature.
   const canSignApprover =
-    report.status !== REPORT_STATUSES.APPROVED &&
-    report.status !== REPORT_STATUSES.ARCHIVED &&
+    !isApprovedOrArchived &&
     !!user &&
     (user.role === USER_ROLES.ADMIN || user.role === USER_ROLES.APPROVER);
+
+  const canStartPostApprovalEdit = canEditPostApprovalReport(user, report);
+  const canCancelPostApprovalRevision =
+    !isApprovedOrArchived &&
+    Boolean(report.isPostApprovalRevision) &&
+    isAuthorizedPostApprovalOwner(user, report);
 
   const dualSigEval = useMemo(
     () =>
@@ -620,18 +636,57 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
               لحماية سلامة البيانات المعتمدة.
             </span>
           </div>
-          {user &&
-            (user.role === USER_ROLES.ADMIN ||
-              user.role === USER_ROLES.PREPARER ||
-              user.role === USER_ROLES.APPROVER) && (
-              <button
-                type="button"
-                onClick={() => onTriggerWorkflow('create_revision')}
-                className="px-3.5 py-1.5 rounded-lg bg-[#C8A85D] hover:bg-[#b59449] text-[#0B2341] text-xs font-bold cursor-pointer"
-              >
-                فتح إصدار جديد للتصحيح
-              </button>
+          {canStartPostApprovalEdit && (
+            <button
+              type="button"
+              onClick={() => onTriggerWorkflow('create_revision')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#082D56] hover:bg-[#10518C] text-white border border-[#D5AD5D]/70 text-xs font-bold cursor-pointer"
+            >
+              <FilePenLine className="w-3.5 h-3.5 text-[#DFC076]" />
+              <span>تحرير التقرير بعد الاعتماد</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isApprovedOrArchived && report.isPostApprovalRevision && (
+        <div className="bg-amber-50/90 border border-[#D5AD5D] rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+          <div className="space-y-1 text-xs text-[#082D56]">
+            <div className="flex flex-wrap items-center gap-2 font-extrabold">
+              <FilePenLine className="w-4 h-4 text-[#9A7422] shrink-0" />
+              <span>
+                قيد تعديل تقرير معتمد — الإصدار الجديد{' '}
+                <span dir="ltr" className="font-mono text-[#9A7422]">
+                  v{report.currentVersion}
+                </span>{' '}
+                (النسخة المعتمدة المحفوظة:{' '}
+                <span dir="ltr" className="font-mono">
+                  v{report.sourceApprovedVersion ?? Math.max(1, report.currentVersion - 1)}
+                </span>
+                )
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-700">
+              السبب: <strong className="text-[#082D56]">{report.revisionReason || '—'}</strong> · فُتح بواسطة:{' '}
+              <strong>{report.revisionStartedByName || '—'}</strong> · يتطلب إعادة الاعتماد استكمال توقيع معد التقرير
+              وتوقيع المعتمد من جديد.
+            </p>
+            {user && !isAuthorizedPostApprovalOwner(user, report) && (
+              <p className="text-[11px] font-bold text-[#C94444]">
+                التحرير مقتصر على معد التقرير الأصلي أو مدير النظام؛ التقرير معروض لك بوضع القراءة فقط.
+              </p>
             )}
+          </div>
+          {canCancelPostApprovalRevision && (
+            <button
+              type="button"
+              onClick={() => onTriggerWorkflow('cancel_revision')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white hover:bg-red-50 text-[#C94444] border border-[#C94444]/40 text-xs font-bold shrink-0 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>إلغاء مسودة التعديل</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -4095,7 +4150,11 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                 </button>
                 <button
                   type="button"
-                  disabled={report.status === REPORT_STATUSES.DRAFT}
+                  disabled={
+                    isApprovedOrArchived
+                      ? !canStartPostApprovalEdit
+                      : report.status === REPORT_STATUSES.DRAFT
+                  }
                   onClick={() =>
                     onTriggerWorkflow(
                       isApprovedOrArchived ? 'create_revision' : 'return_revision'
@@ -4104,7 +4163,7 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-white hover:bg-red-50 text-slate-700 hover:text-[#C43D47] border border-slate-300 text-xs font-extrabold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  <span>{isApprovedOrArchived ? 'فتح إصدار تعديل' : 'إلغاء الاعتماد / إرجاع'}</span>
+                  <span>{isApprovedOrArchived ? 'تحرير التقرير بعد الاعتماد' : 'إلغاء الاعتماد / إرجاع'}</span>
                 </button>
               </div>
             </div>

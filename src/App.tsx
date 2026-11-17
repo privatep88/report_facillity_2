@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, onApiUnauthorized } from './api/client.ts';
+import { ApiError, api, onApiUnauthorized } from './api/client.ts';
 import { AnalyticsTab } from './components/AnalyticsTab.tsx';
 import { ApprovedArchiveTab } from './components/ApprovedArchiveTab.tsx';
 import { CorporateFooter } from './components/CorporateFooter.tsx';
@@ -12,8 +12,11 @@ import { MonthlyReportTab } from './components/MonthlyReportTab.tsx';
 import {
   AdminSettingsModal,
   AuditHistoryModal,
+  type AuditHistoryReportMeta,
   AuthModal,
   NewReportModal,
+  PostApprovalEditConfirmModal,
+  type PostApprovalEditTarget,
   SitesCategoriesModal,
   WorkflowActionModal,
 } from './components/ToastAndModals.tsx';
@@ -84,6 +87,8 @@ export default function App() {
   const [sitesModalOpen, setSitesModalOpen] = useState(false);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historyModalReport, setHistoryModalReport] = useState<AuditHistoryReportMeta | null>(null);
+  const [postApprovalConfirmTarget, setPostApprovalConfirmTarget] = useState<PostApprovalEditTarget | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [snapshotPreview, setSnapshotPreview] = useState<{
     report: MonthlyReportFull;
@@ -101,8 +106,13 @@ export default function App() {
     | 'approve'
     | 'archive'
     | 'create_revision'
+    | 'cancel_revision'
     | null
   >(null);
+  const [workflowTargetReport, setWorkflowTargetReport] = useState<{
+    id: string;
+    reportNumber: string;
+  } | null>(null);
 
   const sessionWarnShownRef = useRef(false);
   const highlightTimeoutRef = useRef<number | null>(null);
@@ -262,7 +272,10 @@ export default function App() {
   const approvedCount = useMemo(
     () =>
       reportsList.filter(
-        (r) => r.status === REPORT_STATUSES.APPROVED || r.status === REPORT_STATUSES.ARCHIVED
+        (r) =>
+          r.status === REPORT_STATUSES.APPROVED ||
+          r.status === REPORT_STATUSES.ARCHIVED ||
+          (r.latestApprovedVersion ?? 0) > 0
       ).length,
     [reportsList]
   );
@@ -279,14 +292,17 @@ export default function App() {
     if (!activeReport) return false;
     setSaving(true);
     try {
-      const res = await api.saveReport(activeReport.id, activeReport);
+      const res = await api.saveReport(activeReport.id, {
+        ...activeReport,
+        expectedLockVersion: activeReport.lockVersion,
+      });
       setActiveReport(res.report);
       setHistory(res.history);
       setDirty(false);
       const listRes = await api.listReports();
       setReportsList(listRes.reports);
       notifySuccess(
-        'تم حفظ التقرير بنجاح',
+        res.report.isPostApprovalRevision ? 'تم حفظ التعديلات بنجاح' : 'تم حفظ التقرير بنجاح',
         `تم تحديث بيانات التقرير ${res.report.reportNumber} (${formatDateTimeWestern(res.report.updatedAt)}).`,
         {
           dedupeKey: `save_ok_${res.report.id}`,
@@ -298,6 +314,40 @@ export default function App() {
       );
       return true;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        notifyError(
+          'تعارض في الحفظ المتزامن',
+          err.message || 'تم حفظ تعديلات أحدث على هذا التقرير قبل حفظ تغييراتك.',
+          {
+            dedupeKey: `save_conflict_${activeReport.id}`,
+            context: 'validation',
+            errorCode: 'ERR-CONFLICT',
+            recordInHistory: true,
+            reportNumber: activeReport.reportNumber,
+            action: {
+              label: 'تحديث أحدث نسخة',
+              onClick: () => {
+                void loadReportDetails(activeReport.id);
+              },
+            },
+          }
+        );
+        return false;
+      }
+      if (err instanceof ApiError && err.status === 403) {
+        notifyError(
+          'ليس لديك صلاحية تعديل هذا التقرير المعتمد',
+          err.message || 'صلاحية التعديل مقتصرة على معد التقرير الأصلي أو مدير النظام.',
+          {
+            dedupeKey: `save_forbidden_${activeReport.id}`,
+            context: 'auth',
+            errorCode: 'ERR-RBAC-403',
+            recordInHistory: true,
+            reportNumber: activeReport.reportNumber,
+          }
+        );
+        return false;
+      }
       notifyError(
         'فشل حفظ البيانات',
         err instanceof Error ? err.message : 'تحقق من صحة المدخلات وصلاحياتك. التعديلات ما زالت محفوظة في الصفحة.',
@@ -313,7 +363,7 @@ export default function App() {
     } finally {
       setSaving(false);
     }
-  }, [activeReport, notifyError, notifySuccess]);
+  }, [activeReport, loadReportDetails, notifyError, notifySuccess]);
 
   const switchReportSafely = useCallback(
     async (id: string, switchToReportTab = false) => {
@@ -496,40 +546,62 @@ export default function App() {
       | 'forward_approval'
       | 'approve'
       | 'archive'
-      | 'create_revision',
-    comment: string
+      | 'create_revision'
+      | 'cancel_revision',
+    comment: string,
+    overrideReportId?: string
   ) => {
-    if (!activeReport) return;
+    const targetId = overrideReportId || activeReport?.id;
+    if (!targetId) return;
+    const isTargetActive = activeReport?.id === targetId;
+    const wasPostApprovalRevision = isTargetActive ? activeReport.isPostApprovalRevision : false;
+
     try {
       if (
+        isTargetActive &&
+        activeReport &&
         dirty &&
         (action === 'submit_review' ||
           (action === 'approve' &&
             (activeReport.status === REPORT_STATUSES.DRAFT || user?.role === 'admin')))
       ) {
-        await api.saveReport(activeReport.id, activeReport);
+        await api.saveReport(activeReport.id, {
+          ...activeReport,
+          expectedLockVersion: activeReport.lockVersion,
+        });
       }
       const res = await api.workflowAction(
-        activeReport.id,
+        targetId,
         action,
         comment,
-        activeReport.approverName,
-        activeReport.approverTitle
+        isTargetActive ? activeReport?.approverName : undefined,
+        isTargetActive ? activeReport?.approverTitle : undefined,
+        action === 'create_revision' && isTargetActive ? activeReport?.currentVersion : undefined
       );
-      setActiveReport(res.report);
+      if (isTargetActive || !activeReport) {
+        setActiveReport(res.report);
+        setDirty(false);
+      }
       setHistory(res.history);
-      setDirty(false);
+      if (historyModalReport?.id === targetId) {
+        setHistoryModalReport(res.report);
+      }
       const listRes = await api.listReports();
       setReportsList(listRes.reports);
+
+      const approveTitle = wasPostApprovalRevision
+        ? 'تم اعتماد الإصدار الجديد بنجاح'
+        : 'تم اعتماد التقرير الشهري رسمياً';
 
       const successMeta: Record<string, { title: string; context: 'submitted' | 'returned' | 'approval' | 'archive' | 'revision' }> = {
         submit_review: { title: 'تم إرسال التقرير للاعتماد بنجاح', context: 'submitted' },
         start_review: { title: 'تم بدء مرحلة المراجعة', context: 'submitted' },
         forward_approval: { title: 'اكتملت المراجعة ورُفع للاعتماد', context: 'approval' },
         return_revision: { title: 'تم إرجاع التقرير إلى مسودة للتعديل', context: 'returned' },
-        approve: { title: 'تم اعتماد التقرير الشهري رسمياً', context: 'approval' },
+        approve: { title: approveTitle, context: 'approval' },
         archive: { title: 'تمت أرشفة التقرير في السجل الدائم', context: 'archive' },
-        create_revision: { title: 'تم فتح إصدار جديد للتصحيح', context: 'revision' },
+        create_revision: { title: 'تم فتح إصدار جديد للتعديل بعد الاعتماد', context: 'revision' },
+        cancel_revision: { title: 'تم إلغاء مسودة التعديل واستعادة النسخة المعتمدة', context: 'returned' },
       };
       const meta = successMeta[action] || { title: 'تم تنفيذ الإجراء', context: 'approval' as const };
       notifySuccess(
@@ -550,13 +622,15 @@ export default function App() {
       );
     } catch (err) {
       notifyError(
-        'تعذر تنفيذ إجراء الاعتماد',
+        err instanceof ApiError && err.status === 403
+          ? 'ليس لديك صلاحية تعديل هذا التقرير المعتمد'
+          : 'تعذر تنفيذ إجراء الاعتماد',
         err instanceof Error ? err.message : '',
         {
           context: 'approval',
           errorCode: `ERR-WF-${action.toUpperCase()}`,
           recordInHistory: true,
-          reportNumber: activeReport.reportNumber,
+          reportNumber: activeReport?.reportNumber,
         }
       );
       throw err;
@@ -565,7 +639,85 @@ export default function App() {
 
   const handleWorkflowConfirm = async (comment: string) => {
     if (!workflowAction) return;
-    await executeWorkflowTransition(workflowAction, comment);
+    await executeWorkflowTransition(workflowAction, comment, workflowTargetReport?.id);
+  };
+
+  const handleConfirmPostApprovalEdit = async (reason: string) => {
+    const target = postApprovalConfirmTarget;
+    if (!target) return;
+    try {
+      const res = await api.workflowAction(
+        target.id,
+        'create_revision',
+        reason,
+        undefined,
+        undefined,
+        target.currentVersion
+      );
+      setActiveReport(res.report);
+      setHistory(res.history);
+      setHistoryModalReport(res.report);
+      setDirty(false);
+      const listRes = await api.listReports();
+      setReportsList(listRes.reports);
+      setPostApprovalConfirmTarget(null);
+      setHistoryModalOpen(false);
+      setActiveTab('report');
+      notifySuccess(
+        'تم فتح إصدار جديد لتعديل التقرير المعتمد',
+        `رقم التقرير: ${res.report.reportNumber} · الإصدار الجديد v${res.report.currentVersion} (بقيت النسخة المعتمدة السابقة محفوظة في الأرشيف).`,
+        {
+          dedupeKey: `post_edit_open_${res.report.id}_v${res.report.currentVersion}`,
+          context: 'revision',
+          recordInHistory: true,
+          reportNumber: res.report.reportNumber,
+          target: { tab: 'report', reportId: res.report.id },
+        }
+      );
+    } catch (err) {
+      notifyError(
+        err instanceof ApiError && err.status === 403
+          ? 'ليس لديك صلاحية تعديل هذا التقرير المعتمد'
+          : 'تعذر فتح تعديل التقرير المعتمد',
+        err instanceof Error ? err.message : '',
+        {
+          context: 'revision',
+          errorCode: 'ERR-POST-EDIT',
+          recordInHistory: true,
+          reportNumber: target.reportNumber,
+        }
+      );
+      throw err;
+    }
+  };
+
+  const handleLinkPreparerOwnership = async (reportId: string, preparerId: string) => {
+    try {
+      const res = await api.linkPreparerOwnership(reportId, preparerId);
+      setHistory(res.history);
+      setHistoryModalReport(res.report);
+      if (activeReport?.id === reportId) {
+        setActiveReport(res.report);
+      }
+      const listRes = await api.listReports();
+      setReportsList(listRes.reports);
+      notifySuccess(
+        'تم ربط معرف معد التقرير بنجاح',
+        `أصبح المستخدم المرتبط (${res.report.preparerName}) مخولاً لتحرير التقرير بعد الاعتماد.`,
+        {
+          context: 'admin',
+          recordInHistory: true,
+          reportNumber: res.report.reportNumber,
+        }
+      );
+    } catch (err) {
+      notifyError(
+        'تعذر ربط معرف معد التقرير',
+        err instanceof Error ? err.message : '',
+        { context: 'admin', errorCode: 'ERR-LINK-UID' }
+      );
+      throw err;
+    }
   };
 
   const openExecutiveApprovalFlow = () => {
@@ -706,6 +858,7 @@ export default function App() {
       | 'approve'
       | 'archive'
       | 'create_revision'
+      | 'cancel_revision'
   ) => {
     if (!user) {
       setAuthModalOpen(true);
@@ -741,6 +894,21 @@ export default function App() {
       return;
     }
 
+    if (action === 'create_revision' && activeReport) {
+      setPostApprovalConfirmTarget({
+        id: activeReport.id,
+        reportNumber: activeReport.reportNumber,
+        month: activeReport.month,
+        year: activeReport.year,
+        currentVersion: activeReport.currentVersion,
+        preparerName: activeReport.preparerName,
+      });
+      return;
+    }
+
+    setWorkflowTargetReport(
+      activeReport ? { id: activeReport.id, reportNumber: activeReport.reportNumber } : null
+    );
     setWorkflowAction(action);
   };
 
@@ -1038,7 +1206,10 @@ export default function App() {
                 onExportExcel={() => handleExportExcel(activeReport.id)}
                 exportingPdf={exportingPdfKey === `${activeReport.id}_live`}
                 exportingExcel={exportingExcelKey === `${activeReport.id}_live`}
-                onOpenHistory={() => setHistoryModalOpen(true)}
+                onOpenHistory={() => {
+                  setHistoryModalReport(activeReport);
+                  setHistoryModalOpen(true);
+                }}
                 onOpenSitesModal={() => setSitesModalOpen(true)}
                 onTriggerWorkflow={handleTriggerWorkflow}
                 onOpenAuthModal={() => setAuthModalOpen(true)}
@@ -1075,6 +1246,7 @@ export default function App() {
                 try {
                   const res = await api.getReport(id);
                   setHistory(res.history);
+                  setHistoryModalReport(res.report);
                   setHistoryModalOpen(true);
                 } catch (err) {
                   notifyError('تعذر تحميل السجل', err instanceof Error ? err.message : '', {
@@ -1097,6 +1269,7 @@ export default function App() {
                 try {
                   const res = await api.getReport(id);
                   setHistory(res.history);
+                  setHistoryModalReport(res.report);
                   setHistoryModalOpen(true);
                 } catch (err) {
                   notifyError('تعذر تحميل السجل', err instanceof Error ? err.message : '', {
@@ -1147,10 +1320,21 @@ export default function App() {
       <WorkflowActionModal
         open={!!workflowAction}
         action={workflowAction}
-        reportNumber={activeReport?.reportNumber || ''}
+        reportNumber={workflowTargetReport?.reportNumber || activeReport?.reportNumber || ''}
         user={user}
-        onClose={() => setWorkflowAction(null)}
+        onClose={() => {
+          setWorkflowAction(null);
+          setWorkflowTargetReport(null);
+        }}
         onConfirm={handleWorkflowConfirm}
+      />
+
+      <PostApprovalEditConfirmModal
+        open={!!postApprovalConfirmTarget}
+        report={postApprovalConfirmTarget}
+        currentUser={user}
+        onClose={() => setPostApprovalConfirmTarget(null)}
+        onConfirm={handleConfirmPostApprovalEdit}
       />
 
       <SitesCategoriesModal
@@ -1219,15 +1403,39 @@ export default function App() {
         approvals={history.approvals}
         auditLogs={history.auditLogs}
         versions={history.versions}
+        reportMeta={historyModalReport}
+        currentUser={user}
         onLoadVersion={(ver) => {
-          if (activeReport) {
+          const targetId = historyModalReport?.id || activeReport?.id;
+          if (targetId) {
             setHistoryModalOpen(false);
-            handleOpenSnapshotPreview(activeReport.id, ver);
+            handleOpenSnapshotPreview(targetId, ver);
           }
         }}
         onExportVersionExcel={(reportId, ver) => {
           void handleExportExcel(reportId, ver);
         }}
+        onRequestPostApprovalEdit={() => {
+          if (!historyModalReport) return;
+          setPostApprovalConfirmTarget({
+            id: historyModalReport.id,
+            reportNumber: historyModalReport.reportNumber,
+            month: historyModalReport.month,
+            year: historyModalReport.year,
+            currentVersion: historyModalReport.currentVersion,
+            preparerName: historyModalReport.preparerName || '',
+          });
+        }}
+        onOpenRevisionDraft={(reportId) => {
+          setHistoryModalOpen(false);
+          void switchReportSafely(reportId, true);
+        }}
+        onCancelPostApprovalRevision={(reportId) => {
+          const targetNum = historyModalReport?.reportNumber || activeReport?.reportNumber || '';
+          setWorkflowTargetReport({ id: reportId, reportNumber: targetNum });
+          setWorkflowAction('cancel_revision');
+        }}
+        onLinkPreparer={handleLinkPreparerOwnership}
       />
 
       {(snapshotPreview || activeReport) && (

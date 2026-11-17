@@ -21,6 +21,14 @@ import {
   formatDateWestern,
   syncReceptionServiceWithSecurity,
 } from '../utils/calculations.ts';
+import { validateReportCompleteness } from '../services/ReportValidationService.ts';
+import {
+  canEditPostApprovalReport,
+  canEditWorkingReport,
+  isAuthorizedPostApprovalOwner,
+} from '../utils/postApprovalAccess.ts';
+import { computeReportFieldDiffs } from '../utils/reportDiff.ts';
+import { evaluateDualSignatureApproval } from '../utils/signatureValidation.ts';
 import { populateReportWithSampleData } from '../utils/sampleReportData.ts';
 
 const STATIC_STORE_KEY = 'saaed_fm_static_store_v1';
@@ -427,7 +435,49 @@ function buildReportSummaries(state: StaticStoreState): ReportListSummary[] {
     .sort((a, b) => (b.year !== a.year ? b.year - a.year : b.month - a.month))
     .map((r) => {
       const m = computeReportMetrics(r, state.sites, state.categories, state.thresholds);
-      const versionCount = state.histories[r.id]?.versions.length || 0;
+      const versions = state.histories[r.id]?.versions || [];
+      const versionCount = versions.length;
+      const latestVer = versions.reduce<(typeof versions)[0] | null>(
+        (best, cur) => (!best || cur.summary.versionNumber > best.summary.versionNumber ? cur : best),
+        null
+      );
+
+      let latestApprovedVersion: number | null = null;
+      let latestApprovedAt: string | null = null;
+      let latestApprovedByName: string | null = null;
+      let latestApprovedPreparedAt: string | null = null;
+      let latestApprovedStatus: ReportListSummary['latestApprovedStatus'] = null;
+      let latestApprovedTotalReceived: number | null = null;
+      let latestApprovedCompletionRate: number | null = null;
+
+      if (latestVer) {
+        const snapRep = latestVer.snapshot.report;
+        const snapMetrics = computeReportMetrics(
+          snapRep,
+          latestVer.snapshot.sites || state.sites,
+          latestVer.snapshot.categories || state.categories,
+          latestVer.snapshot.thresholds || state.thresholds
+        );
+        latestApprovedVersion = latestVer.summary.versionNumber;
+        latestApprovedAt = snapRep.approvedAt || latestVer.summary.createdAt;
+        latestApprovedByName = snapRep.approverName || latestVer.summary.approvedByName;
+        latestApprovedPreparedAt = snapRep.preparedAt || null;
+        latestApprovedStatus =
+          snapRep.status === REPORT_STATUSES.ARCHIVED || r.status === REPORT_STATUSES.ARCHIVED
+            ? REPORT_STATUSES.ARCHIVED
+            : REPORT_STATUSES.APPROVED;
+        latestApprovedTotalReceived = snapMetrics.totalReceived;
+        latestApprovedCompletionRate = snapMetrics.overallCompletionPct;
+      } else if (r.status === REPORT_STATUSES.APPROVED || r.status === REPORT_STATUSES.ARCHIVED) {
+        latestApprovedVersion = r.currentVersion;
+        latestApprovedAt = r.approvedAt;
+        latestApprovedByName = r.approverName;
+        latestApprovedPreparedAt = r.preparedAt;
+        latestApprovedStatus = r.status;
+        latestApprovedTotalReceived = m.totalReceived;
+        latestApprovedCompletionRate = m.overallCompletionPct;
+      }
+
       return {
         id: r.id,
         reportNumber: r.reportNumber,
@@ -436,6 +486,7 @@ function buildReportSummaries(state: StaticStoreState): ReportListSummary[] {
         department: r.department,
         status: r.status,
         currentVersion: r.currentVersion,
+        preparerId: r.preparerId ?? null,
         preparerName: r.preparerName,
         approverName: r.approverName,
         preparedAt: r.preparedAt,
@@ -448,6 +499,18 @@ function buildReportSummaries(state: StaticStoreState): ReportListSummary[] {
         totalFaults: m.maintenance.grandTotalFaults,
         totalCostAed: m.maintenance.grandTotalCostAed,
         versionCount,
+        isPostApprovalRevision: !!r.isPostApprovalRevision,
+        revisionReason: r.revisionReason ?? null,
+        revisionStartedByName: r.revisionStartedByName ?? null,
+        revisionStartedAt: r.revisionStartedAt ?? null,
+        sourceApprovedVersion: r.sourceApprovedVersion ?? null,
+        latestApprovedVersion,
+        latestApprovedAt,
+        latestApprovedByName,
+        latestApprovedPreparedAt,
+        latestApprovedStatus,
+        latestApprovedTotalReceived,
+        latestApprovedCompletionRate,
       };
     });
 }
@@ -459,6 +522,27 @@ function getHistoryResponse(state: StaticStoreState, reportId: string) {
     auditLogs: h.auditLogs,
     versions: h.versions.map((v) => v.summary),
   };
+}
+
+function getActiveStaticUser(state: StaticStoreState): AuthUser | null {
+  if (!state.currentUserId) return null;
+  const user = state.users.find((u) => u.id === state.currentUserId) || null;
+  return user && user.isActive ? user : null;
+}
+
+function appendStaticAuditLog(
+  state: StaticStoreState,
+  reportId: string,
+  entry: Omit<AuditLogEntry, 'id' | 'reportId'>
+) {
+  if (!state.histories[reportId]) {
+    state.histories[reportId] = { approvals: [], auditLogs: [], versions: [] };
+  }
+  state.histories[reportId].auditLogs.unshift({
+    id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    reportId,
+    ...entry,
+  });
 }
 
 export const staticFallbackApi = {
@@ -579,6 +663,10 @@ export const staticFallbackApi = {
 
   async createReport(payload: { year: number; month: number; department: string }) {
     const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user || (user.role !== USER_ROLES.ADMIN && user.role !== USER_ROLES.PREPARER)) {
+      throw new Error('لا تملك صلاحية إنشاء تقرير جديد');
+    }
     const id = `rep_${payload.year}_${String(payload.month).padStart(2, '0')}_${Date.now().toString(36).slice(-3)}`;
     const seq = Object.keys(state.reports).length + 1;
     const reportNumber = `FM-${payload.year}-${String(payload.month).padStart(2, '0')}-${String(seq).padStart(3, '0')}`;
@@ -591,6 +679,9 @@ export const staticFallbackApi = {
       sites: state.sites,
       categories: state.categories,
     });
+    newRep.preparerId = user.id;
+    newRep.preparerName = user.fullName;
+    newRep.preparerTitle = user.jobTitle;
     state.reports[id] = newRep;
     state.histories[id] = { approvals: [], auditLogs: [], versions: [] };
     saveStore(state);
@@ -599,11 +690,98 @@ export const staticFallbackApi = {
 
   async saveReport(id: string, report: MonthlyReportFull) {
     const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user) throw new Error('يرجى تسجيل الدخول أولاً لتنفيذ هذا الإجراء');
+
+    const existing = state.reports[id];
+    if (!existing) throw new Error('التقرير غير موجود');
+
+    if (existing.status === REPORT_STATUSES.APPROVED || existing.status === REPORT_STATUSES.ARCHIVED) {
+      throw new Error('يُمنع تعديل النسخة المعتمدة أو المؤرشفة مباشرة. استخدم «تحرير التقرير بعد الاعتماد» لفتح إصدار جديد.');
+    }
+    if (existing.isPostApprovalRevision && !isAuthorizedPostApprovalOwner(user, existing)) {
+      throw new Error('ليس لديك صلاحية تعديل هذا التقرير المعتمد');
+    }
+    if (!canEditWorkingReport(user, existing)) {
+      throw new Error('ليس لديك صلاحية تعديل هذا التقرير');
+    }
+
+    const expectedLock = report.expectedLockVersion ?? report.lockVersion;
+    if (
+      expectedLock !== undefined &&
+      expectedLock !== null &&
+      Number(expectedLock) !== Number(existing.lockVersion ?? 1)
+    ) {
+      throw new Error('تم حفظ تعديلات أحدث على هذا التقرير قبل حفظ تغييراتك. يرجى تحديث الصفحة لتجنب التعارض.');
+    }
+
+    const now = new Date().toISOString();
     const normalized = syncReceptionServiceWithSecurity({
       ...report,
       id,
-      updatedAt: new Date().toISOString(),
+      // Preserve signature/revision system fields against client payload spoofing
+      status: existing.status,
+      currentVersion: existing.currentVersion,
+      preparerId: existing.preparerId,
+      preparerSignatureImage: existing.preparerSignatureImage,
+      preparerSignatureHash: existing.preparerSignatureHash,
+      preparerSignedAt: existing.preparerSignedAt,
+      preparerSignedById: existing.preparerSignedById,
+      preparerSignedByName: existing.preparerSignedByName,
+      approverSignatureImage: existing.approverSignatureImage,
+      approverSignatureHash: existing.approverSignatureHash,
+      approverSignedAt: existing.approverSignedAt,
+      approverSignedById: existing.approverSignedById,
+      approverSignedByName: existing.approverSignedByName,
+      isPostApprovalRevision: existing.isPostApprovalRevision,
+      revisionReason: existing.revisionReason,
+      revisionStartedById: existing.revisionStartedById,
+      revisionStartedByName: existing.revisionStartedByName,
+      revisionStartedByRole: existing.revisionStartedByRole,
+      revisionStartedAt: existing.revisionStartedAt,
+      sourceApprovedVersion: existing.sourceApprovedVersion,
+      lockVersion: (existing.lockVersion ?? 1) + 1,
+      updatedAt: now,
     });
+
+    const diffs = computeReportFieldDiffs(existing, normalized, state.sites, state.categories);
+    const reasonText =
+      existing.isPostApprovalRevision && existing.revisionReason
+        ? `تعديل ما بعد الاعتماد (${existing.revisionReason})`
+        : 'تحديث البيانات التشغيلية في المسودة';
+
+    if (diffs.length === 0) {
+      appendStaticAuditLog(state, id, {
+        userId: user.id,
+        userName: user.fullName,
+        userRole: user.role,
+        action: 'حفظ بيانات التقرير',
+        fieldPath: 'monthly_reports',
+        previousValue: existing.updatedAt,
+        newValue: now,
+        reason: reasonText,
+        versionNumber: existing.currentVersion,
+        reportStatus: existing.status,
+        createdAt: now,
+      });
+    } else {
+      for (const d of diffs.slice(0, 60)) {
+        appendStaticAuditLog(state, id, {
+          userId: user.id,
+          userName: user.fullName,
+          userRole: user.role,
+          action: `تعديل حقل: ${d.fieldLabel}`,
+          fieldPath: d.fieldPath,
+          previousValue: d.previousValue,
+          newValue: d.newValue,
+          reason: reasonText,
+          versionNumber: existing.currentVersion,
+          reportStatus: existing.status,
+          createdAt: now,
+        });
+      }
+    }
+
     state.reports[id] = normalized;
     saveStore(state);
     return {
@@ -614,19 +792,79 @@ export const staticFallbackApi = {
 
   async saveSignature(id: string, target: 'preparer' | 'approver', signatureImage: string | null) {
     const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user) throw new Error('يرجى تسجيل الدخول أولاً');
     const report = state.reports[id];
     if (!report) throw new Error('التقرير غير موجود');
+    if (report.status === REPORT_STATUSES.APPROVED || report.status === REPORT_STATUSES.ARCHIVED) {
+      throw new Error('يُمنع تعديل توقيعات النسخة المعتمدة أو المؤرشفة مباشرة');
+    }
+
+    if (target === 'preparer') {
+      const allowed =
+        user.role === USER_ROLES.ADMIN ||
+        (user.role === USER_ROLES.PREPARER &&
+          report.status === REPORT_STATUSES.DRAFT &&
+          (!report.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, report)));
+      if (!allowed) throw new Error('لا تملك صلاحية تعديل توقيع معد التقرير في هذه المرحلة');
+    } else {
+      if (user.role !== USER_ROLES.ADMIN && user.role !== USER_ROLES.APPROVER) {
+        throw new Error('صلاحية توقيع المعتمد مخصصة لصاحب صلاحية الاعتماد أو مدير النظام فقط');
+      }
+    }
+
+    if (signatureImage !== null) {
+      const val = validateReportCompleteness(report, {
+        stage: target === 'preparer' ? 'sign_preparer' : 'sign_approver',
+        sites: state.sites,
+        categories: state.categories,
+        user,
+      });
+      if (!val.isComplete) {
+        throw new Error(val.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة');
+      }
+    }
+
     const now = new Date().toISOString();
-    const updated: MonthlyReportFull = { ...report, updatedAt: now };
+    const updated: MonthlyReportFull = {
+      ...report,
+      lockVersion: (report.lockVersion ?? 1) + 1,
+      updatedAt: now,
+    };
     if (target === 'preparer') {
       updated.preparerSignatureImage = signatureImage;
       updated.preparerSignedAt = signatureImage ? now : null;
+      updated.preparerSignedById = signatureImage ? user.id : null;
+      updated.preparerSignedByName = signatureImage ? user.fullName : null;
+      updated.preparerSignatureStatus = 'valid';
       updated.preparerSignatureHash = signatureImage ? `SIG-PREP-${Date.now().toString(16).toUpperCase()}` : null;
     } else {
       updated.approverSignatureImage = signatureImage;
       updated.approverSignedAt = signatureImage ? now : null;
+      updated.approverSignedById = signatureImage ? user.id : null;
+      updated.approverSignedByName = signatureImage ? user.fullName : null;
+      updated.approverSignatureStatus = 'valid';
       updated.approverSignatureHash = signatureImage ? `SIG-APPR-${Date.now().toString(16).toUpperCase()}` : null;
     }
+
+    appendStaticAuditLog(state, id, {
+      userId: user.id,
+      userName: user.fullName,
+      userRole: user.role,
+      action: signatureImage
+        ? `إضافة / تحديث توقيع ${target === 'preparer' ? 'معد التقرير' : 'المعتمد'}`
+        : `حذف توقيع ${target === 'preparer' ? 'معد التقرير' : 'المعتمد'}`,
+      fieldPath: target === 'preparer' ? 'preparerSignatureImage' : 'approverSignatureImage',
+      previousValue: report[target === 'preparer' ? 'preparerSignatureImage' : 'approverSignatureImage']
+        ? 'توقيع محفوظ'
+        : 'بدون توقيع',
+      newValue: signatureImage ? 'توقيع مرفق/مرسوم' : 'محذوف',
+      reason: `تحديث التوقيع الرسمي`,
+      versionNumber: report.currentVersion,
+      reportStatus: report.status,
+      createdAt: now,
+    });
+
     state.reports[id] = updated;
     saveStore(state);
     return {
@@ -637,12 +875,36 @@ export const staticFallbackApi = {
 
   async saveDate(id: string, target: 'preparedAt' | 'approvedAt', dateValue: string | null) {
     const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user) throw new Error('يرجى تسجيل الدخول أولاً');
     const report = state.reports[id];
     if (!report) throw new Error('التقرير غير موجود');
+    if (report.status === REPORT_STATUSES.APPROVED || report.status === REPORT_STATUSES.ARCHIVED) {
+      throw new Error('يُمنع تعديل تواريخ النسخة المعتمدة أو المؤرشفة مباشرة');
+    }
+    if (target === 'preparedAt') {
+      const allowed =
+        user.role === USER_ROLES.ADMIN ||
+        (user.role === USER_ROLES.PREPARER &&
+          report.status === REPORT_STATUSES.DRAFT &&
+          (!report.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, report)));
+      if (!allowed) throw new Error('لا تملك صلاحية تعديل تاريخ التقديم');
+    } else {
+      const allowed =
+        user.role === USER_ROLES.ADMIN ||
+        user.role === USER_ROLES.APPROVER ||
+        (user.role === USER_ROLES.PREPARER &&
+          report.status === REPORT_STATUSES.DRAFT &&
+          (!report.isPostApprovalRevision || isAuthorizedPostApprovalOwner(user, report)));
+      if (!allowed) throw new Error('لا تملك صلاحية تعديل تاريخ الاعتماد');
+    }
+
+    const now = new Date().toISOString();
     const updated: MonthlyReportFull = {
       ...report,
-      [target]: dateValue || formatDateWestern(new Date().toISOString()),
-      updatedAt: new Date().toISOString(),
+      [target]: dateValue || formatDateWestern(now),
+      lockVersion: (report.lockVersion ?? 1) + 1,
+      updatedAt: now,
     };
     state.reports[id] = updated;
     saveStore(state);
@@ -654,46 +916,217 @@ export const staticFallbackApi = {
 
   async workflowAction(
     id: string,
-    action: 'submit_review' | 'start_review' | 'return_revision' | 'forward_approval' | 'approve' | 'archive' | 'create_revision',
+    action:
+      | 'submit_review'
+      | 'start_review'
+      | 'return_revision'
+      | 'forward_approval'
+      | 'approve'
+      | 'archive'
+      | 'create_revision'
+      | 'cancel_revision',
     comment = '',
     approverName?: string,
-    approverTitle?: string
+    approverTitle?: string,
+    expectedVersion?: number
   ) {
     const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user) throw new Error('يرجى تسجيل الدخول أولاً');
     const report = state.reports[id];
     if (!report) throw new Error('التقرير غير موجود');
     const now = new Date().toISOString();
     const fromStatus = report.status;
     let toStatus = report.status;
     let currentVersion = report.currentVersion;
+    let updated: MonthlyReportFull;
 
-    if (action === 'submit_review') toStatus = REPORT_STATUSES.READY_FOR_REVIEW;
-    else if (action === 'start_review') toStatus = REPORT_STATUSES.UNDER_REVIEW;
-    else if (action === 'return_revision') toStatus = REPORT_STATUSES.DRAFT;
-    else if (action === 'forward_approval') toStatus = REPORT_STATUSES.PENDING_APPROVAL;
-    else if (action === 'approve') toStatus = REPORT_STATUSES.APPROVED;
-    else if (action === 'archive') toStatus = REPORT_STATUSES.ARCHIVED;
-    else if (action === 'create_revision') {
-      toStatus = REPORT_STATUSES.DRAFT;
-      currentVersion += 1;
-    }
-
-    const updated: MonthlyReportFull = {
-      ...report,
-      status: toStatus,
-      currentVersion,
-      approverName: approverName || report.approverName,
-      approverTitle: approverTitle || report.approverTitle,
-      approvedAt: action === 'approve' ? formatDateWestern(now) : report.approvedAt,
-      updatedAt: now,
-    };
-
-    state.reports[id] = updated;
     if (!state.histories[id]) {
       state.histories[id] = { approvals: [], auditLogs: [], versions: [] };
     }
+
+    if (action === 'submit_review') {
+      if (user.role !== USER_ROLES.ADMIN && user.role !== USER_ROLES.PREPARER) {
+        throw new Error('صلاحية تقديم التقرير مخصصة لمعد التقرير أو مدير النظام فقط');
+      }
+      if (report.isPostApprovalRevision && !isAuthorizedPostApprovalOwner(user, report)) {
+        throw new Error('ليس لديك صلاحية إرسال تعديل هذا التقرير المعتمد');
+      }
+      if (fromStatus !== REPORT_STATUSES.DRAFT) {
+        throw new Error('يمكن إرسال التقرير للاعتماد من حالة المسودة فقط');
+      }
+      const val = validateReportCompleteness(report, {
+        stage: 'submit_review',
+        sites: state.sites,
+        categories: state.categories,
+        user,
+      });
+      if (!val.isComplete) {
+        throw new Error(val.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة');
+      }
+      toStatus = REPORT_STATUSES.PENDING_APPROVAL;
+      updated = {
+        ...report,
+        status: toStatus,
+        preparerId: report.preparerId || user.id,
+        preparedAt: report.preparedAt || now,
+        lockVersion: (report.lockVersion ?? 1) + 1,
+        updatedAt: now,
+      };
+    } else if (action === 'start_review') {
+      toStatus = REPORT_STATUSES.UNDER_REVIEW;
+      updated = { ...report, status: toStatus, lockVersion: (report.lockVersion ?? 1) + 1, updatedAt: now };
+    } else if (action === 'forward_approval') {
+      toStatus = REPORT_STATUSES.PENDING_APPROVAL;
+      updated = { ...report, status: toStatus, lockVersion: (report.lockVersion ?? 1) + 1, updatedAt: now };
+    } else if (action === 'return_revision') {
+      if (!comment.trim()) throw new Error('يجب كتابة سبب الإرجاع للتعديل');
+      toStatus = REPORT_STATUSES.DRAFT;
+      updated = { ...report, status: toStatus, lockVersion: (report.lockVersion ?? 1) + 1, updatedAt: now };
+    } else if (action === 'approve') {
+      if (user.role !== USER_ROLES.ADMIN && user.role !== USER_ROLES.APPROVER) {
+        throw new Error('صلاحية الاعتماد النهائي مخصصة للمعتمد أو مدير النظام فقط');
+      }
+      if (fromStatus === REPORT_STATUSES.APPROVED || fromStatus === REPORT_STATUSES.ARCHIVED) {
+        throw new Error('التقرير معتمد مسبقاً');
+      }
+      const candidate: MonthlyReportFull = {
+        ...report,
+        approverName: (approverName ?? report.approverName).trim() || user.fullName,
+        approverTitle: (approverTitle ?? report.approverTitle).trim() || user.jobTitle,
+      };
+      const val = validateReportCompleteness(candidate, {
+        stage: 'approve',
+        sites: state.sites,
+        categories: state.categories,
+        user,
+      });
+      if (!val.dataIsComplete) {
+        throw new Error(val.issues[0]?.message || 'توجد بيانات إلزامية غير مكتملة');
+      }
+      const sigEval = evaluateDualSignatureApproval(candidate, user);
+      if (!sigEval.canApproveReport) {
+        throw new Error(sigEval.blockingReasons[0] || 'يتطلب الاعتماد النهائي توقيع معد التقرير ومعتمد التقرير');
+      }
+      toStatus = REPORT_STATUSES.APPROVED;
+      updated = {
+        ...candidate,
+        status: toStatus,
+        approvedAt: report.approvedAt || now,
+        approverId: user.id,
+        approverSignatureHash: report.approverSignatureHash || `SIG-${Date.now().toString(16).toUpperCase()}`,
+        isPostApprovalRevision: false,
+        lockVersion: (report.lockVersion ?? 1) + 1,
+        updatedAt: now,
+      };
+    } else if (action === 'archive') {
+      if (user.role !== USER_ROLES.ADMIN && user.role !== USER_ROLES.APPROVER) {
+        throw new Error('صلاحية الأرشفة مخصصة للمعتمد أو مدير النظام فقط');
+      }
+      toStatus = REPORT_STATUSES.ARCHIVED;
+      updated = { ...report, status: toStatus, lockVersion: (report.lockVersion ?? 1) + 1, updatedAt: now };
+    } else if (action === 'create_revision') {
+      if (!isAuthorizedPostApprovalOwner(user, report)) {
+        throw new Error('ليس لديك صلاحية تعديل هذا التقرير المعتمد');
+      }
+      if (report.isPostApprovalRevision && fromStatus !== REPORT_STATUSES.APPROVED && fromStatus !== REPORT_STATUSES.ARCHIVED) {
+        throw new Error(`تم فتح إصدار تعديل (v${report.currentVersion}) لهذا التقرير المعتمد مسبقاً.`);
+      }
+      if (!canEditPostApprovalReport(user, report)) {
+        throw new Error('يُفتح تعديل ما بعد الاعتماد للتقارير المعتمدة أو المؤرشفة فقط');
+      }
+      if (expectedVersion !== undefined && expectedVersion !== report.currentVersion) {
+        throw new Error('تغير رقم الإصدار الحالي للتقرير قبل فتح التعديل؛ يرجى التحديث.');
+      }
+      if (!comment.trim()) {
+        throw new Error('يرجى إدخال سبب تعديل التقرير المعتمد');
+      }
+
+      // Ensure immutable approved snapshot exists before bumping version
+      const hasSnap = state.histories[id].versions.some((v) => v.summary.versionNumber === report.currentVersion);
+      if (!hasSnap) {
+        const snapToken = report.approverSignatureHash || `SIG-ARCHIVE-V${report.currentVersion}`;
+        state.histories[id].versions.unshift({
+          summary: {
+            id: `ver_${Date.now()}`,
+            reportId: id,
+            versionNumber: report.currentVersion,
+            approvedById: report.approverId || user.id,
+            approvedByName: report.approverName || user.fullName,
+            signatureToken: snapToken,
+            createdAt: report.approvedAt || report.updatedAt,
+            revisionReason: report.revisionReason ?? null,
+            sourceApprovedVersion: report.sourceApprovedVersion ?? null,
+            editedByName: report.revisionStartedByName ?? report.preparerName ?? null,
+          },
+          snapshot: {
+            report: JSON.parse(JSON.stringify(report)) as MonthlyReportFull,
+            sites: state.sites,
+            categories: state.categories,
+            thresholds: state.thresholds,
+          },
+        });
+      }
+
+      toStatus = REPORT_STATUSES.DRAFT;
+      currentVersion += 1;
+      updated = {
+        ...report,
+        status: toStatus,
+        currentVersion,
+        isPostApprovalRevision: true,
+        revisionReason: comment.trim(),
+        revisionStartedById: user.id,
+        revisionStartedByName: user.fullName,
+        revisionStartedByRole: user.role,
+        revisionStartedAt: now,
+        sourceApprovedVersion: report.currentVersion,
+        preparerSignatureHash: null,
+        preparerSignatureImage: null,
+        preparerSignedAt: null,
+        preparerSignedById: null,
+        preparerSignedByName: null,
+        preparerSignatureStatus: 'valid',
+        reviewerId: null,
+        reviewerName: '',
+        reviewerTitle: '',
+        reviewedAt: null,
+        approvedAt: null,
+        approverSignatureHash: null,
+        approverSignatureImage: null,
+        approverSignedAt: null,
+        approverSignedById: null,
+        approverSignedByName: null,
+        approverSignatureStatus: 'valid',
+        lockVersion: (report.lockVersion ?? 1) + 1,
+        updatedAt: now,
+      };
+    } else {
+      // cancel_revision
+      if (!isAuthorizedPostApprovalOwner(user, report)) {
+        throw new Error('ليس لديك صلاحية إلغاء مسودة التعديل');
+      }
+      if (!report.isPostApprovalRevision || !report.sourceApprovedVersion) {
+        throw new Error('لا توجد مسودة تعديل نشطة لإلغائها');
+      }
+      const refVer = state.histories[id].versions.find(
+        (v) => v.summary.versionNumber === report.sourceApprovedVersion
+      );
+      if (!refVer) throw new Error('تعذر العثور على النسخة المعتمدة المرجعية');
+      const snapRep = JSON.parse(JSON.stringify(refVer.snapshot.report)) as MonthlyReportFull;
+      toStatus = snapRep.status === REPORT_STATUSES.ARCHIVED ? REPORT_STATUSES.ARCHIVED : REPORT_STATUSES.APPROVED;
+      currentVersion = snapRep.currentVersion;
+      updated = {
+        ...snapRep,
+        status: toStatus,
+        isPostApprovalRevision: false,
+        lockVersion: (report.lockVersion ?? 1) + 1,
+        updatedAt: now,
+      };
+    }
+
+    state.reports[id] = updated;
     const sigToken = `SIG-${Date.now().toString(16).toUpperCase()}`;
-    const user = state.users.find((u) => u.id === state.currentUserId) || state.users[0];
     state.histories[id].approvals.unshift({
       id: `app_${Date.now()}`,
       reportId: id,
@@ -709,6 +1142,30 @@ export const staticFallbackApi = {
       createdAt: now,
     });
 
+    appendStaticAuditLog(state, id, {
+      userId: user.id,
+      userName: user.fullName,
+      userRole: user.role,
+      action:
+        action === 'create_revision'
+          ? 'فتح تحرير التقرير بعد الاعتماد'
+          : action === 'cancel_revision'
+            ? 'إلغاء مسودة التعديل بعد الاعتماد'
+            : action === 'approve'
+              ? 'اعتماد التقرير رسمياً'
+              : `تغيير حالة التقرير (${action})`,
+      fieldPath: action === 'create_revision' ? 'post_approval_edit' : 'status',
+      previousValue: action === 'create_revision' ? `v${report.currentVersion} (${fromStatus})` : fromStatus,
+      newValue:
+        action === 'create_revision'
+          ? `v${currentVersion} (قيد تعديل تقرير معتمد)`
+          : toStatus,
+      reason: comment || `توقيع إلكتروني موثق: ${sigToken}`,
+      versionNumber: currentVersion,
+      reportStatus: action === 'create_revision' ? 'post_approval_revision' : toStatus,
+      createdAt: now,
+    });
+
     if (action === 'approve') {
       state.histories[id].versions.unshift({
         summary: {
@@ -719,9 +1176,12 @@ export const staticFallbackApi = {
           approvedByName: updated.approverName || user.fullName,
           signatureToken: sigToken,
           createdAt: now,
+          revisionReason: report.revisionReason ?? null,
+          sourceApprovedVersion: report.sourceApprovedVersion ?? null,
+          editedByName: report.revisionStartedByName ?? report.preparerName ?? null,
         },
         snapshot: {
-          report: updated,
+          report: JSON.parse(JSON.stringify(updated)) as MonthlyReportFull,
           sites: state.sites,
           categories: state.categories,
           thresholds: state.thresholds,
@@ -729,6 +1189,45 @@ export const staticFallbackApi = {
       });
     }
 
+    saveStore(state);
+    return {
+      report: updated,
+      history: getHistoryResponse(state, id),
+    };
+  },
+
+  async linkPreparerOwnership(id: string, preparerId: string) {
+    const state = loadStore();
+    const user = getActiveStaticUser(state);
+    if (!user || user.role !== USER_ROLES.ADMIN) {
+      throw new Error('صلاحية ربط ملكية معد التقرير مخصصة لمدير النظام فقط');
+    }
+    const targetUser = state.users.find((u) => u.id === preparerId && u.isActive);
+    if (!targetUser) throw new Error('حساب معد التقرير المحدد غير موجود');
+    const existing = state.reports[id];
+    if (!existing) throw new Error('التقرير غير موجود');
+
+    const now = new Date().toISOString();
+    const updated: MonthlyReportFull = {
+      ...existing,
+      preparerId: targetUser.id,
+      lockVersion: (existing.lockVersion ?? 1) + 1,
+      updatedAt: now,
+    };
+    state.reports[id] = updated;
+    appendStaticAuditLog(state, id, {
+      userId: user.id,
+      userName: user.fullName,
+      userRole: user.role,
+      action: 'ربط ملكية معد التقرير (UID)',
+      fieldPath: 'preparerId',
+      previousValue: existing.preparerId || 'غير مرتبط',
+      newValue: `${targetUser.id} (${targetUser.fullName})`,
+      reason: 'توثيق معرف معد التقرير من قبل مدير النظام',
+      versionNumber: existing.currentVersion,
+      reportStatus: existing.status,
+      createdAt: now,
+    });
     saveStore(state);
     return {
       report: updated,

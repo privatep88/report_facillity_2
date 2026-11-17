@@ -14,6 +14,7 @@ import {
   getThresholds,
   hashPassword,
   initSchemaAndSeed,
+  linkReportPreparerOwnership,
   listReportsSummary,
   saveReportData,
   saveReportDate,
@@ -399,7 +400,12 @@ async function startServer() {
       const history = getReportHistory(updated.id);
       res.json({ report: updated, history });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'فشل حفظ التقرير' });
+      const domainErr = err as { statusCode?: number; validation?: unknown };
+      const status = domainErr.statusCode || 400;
+      res.status(status).json({
+        error: err instanceof Error ? err.message : 'فشل حفظ التقرير',
+        validation: domainErr.validation,
+      });
     }
   });
 
@@ -457,7 +463,7 @@ async function startServer() {
 
   app.post('/api/reports/:id/workflow', requireAuth, (req: AuthedRequest, res: Response) => {
     try {
-      const { action, comment, approverName, approverTitle } = req.body as {
+      const { action, comment, approverName, approverTitle, expectedVersion } = req.body as {
         action:
           | 'submit_review'
           | 'start_review'
@@ -465,10 +471,12 @@ async function startServer() {
           | 'forward_approval'
           | 'approve'
           | 'archive'
-          | 'create_revision';
+          | 'create_revision'
+          | 'cancel_revision';
         comment?: string;
         approverName?: string;
         approverTitle?: string;
+        expectedVersion?: number;
       };
       const updated = transitionWorkflow({
         reportId: req.params.id,
@@ -477,6 +485,7 @@ async function startServer() {
         comment,
         approverName,
         approverTitle,
+        expectedVersion,
       });
       const history = getReportHistory(updated.id);
       res.json({ report: updated, history });
@@ -487,6 +496,26 @@ async function startServer() {
         error: err instanceof Error ? err.message : 'تعذر تنفيذ إجراء الاعتماد',
         validation: domainErr.validation,
       });
+    }
+  });
+
+  app.post('/api/reports/:id/link-preparer', requireRole([USER_ROLES.ADMIN]), (req: AuthedRequest, res: Response) => {
+    try {
+      const { preparerId } = req.body as { preparerId?: string };
+      if (!preparerId || !preparerId.trim()) {
+        res.status(400).json({ error: 'يرجى تحديد معرف حساب معد التقرير (UID)' });
+        return;
+      }
+      const updated = linkReportPreparerOwnership({
+        reportId: req.params.id,
+        preparerId: preparerId.trim(),
+        adminUser: req.authUser!,
+      });
+      const history = getReportHistory(updated.id);
+      res.json({ report: updated, history });
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode || 400;
+      res.status(status).json({ error: err instanceof Error ? err.message : 'تعذر ربط معرف معد التقرير' });
     }
   });
 

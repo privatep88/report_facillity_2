@@ -76,11 +76,42 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
   const [preparerFilter, setPreparerFilter] = useState<string>('all');
   const [approverFilter, setApproverFilter] = useState<string>('all');
 
-  // STRICT RULE: Archive shows ONLY Approved & Archived reports (never Drafts or Under Review!)
+  const resolveApprovedRow = (r: ReportListSummary) => {
+    const approvedVersion = r.latestApprovedVersion ?? r.currentVersion;
+    const approvedAt = r.latestApprovedAt ?? r.approvedAt;
+    const approvedByName = r.latestApprovedByName ?? r.approverName;
+    const preparedAt = r.latestApprovedPreparedAt ?? r.preparedAt;
+    const totalReceived = r.latestApprovedTotalReceived ?? r.totalReceived;
+    const completionRate = r.latestApprovedCompletionRate ?? r.completionRate;
+    const approvedStatus =
+      r.latestApprovedStatus ??
+      (r.status === REPORT_STATUSES.ARCHIVED ? REPORT_STATUSES.ARCHIVED : REPORT_STATUSES.APPROVED);
+    const hasActiveRevision =
+      Boolean(r.isPostApprovalRevision) &&
+      r.status !== REPORT_STATUSES.APPROVED &&
+      r.status !== REPORT_STATUSES.ARCHIVED;
+
+    return {
+      approvedVersion,
+      approvedAt,
+      approvedByName,
+      preparedAt,
+      totalReceived,
+      completionRate,
+      approvedStatus,
+      hasActiveRevision,
+    };
+  };
+
+  // STRICT RULE: Archive shows ONLY reports that have an officially Approved/Archived snapshot
+  // (keeps latest approved version visible even while a new post-approval revision draft is open).
   const approvedOnly = useMemo(
     () =>
       reports.filter(
-        (r) => r.status === REPORT_STATUSES.APPROVED || r.status === REPORT_STATUSES.ARCHIVED
+        (r) =>
+          r.status === REPORT_STATUSES.APPROVED ||
+          r.status === REPORT_STATUSES.ARCHIVED ||
+          (r.latestApprovedVersion ?? 0) > 0
       ),
     [reports]
   );
@@ -92,7 +123,14 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
     [approvedOnly]
   );
   const approvers = useMemo(
-    () => Array.from(new Set(approvedOnly.map((r) => r.approverName).filter(Boolean))),
+    () =>
+      Array.from(
+        new Set(
+          approvedOnly
+            .map((r) => r.latestApprovedByName ?? r.approverName)
+            .filter((v): v is string => Boolean(v))
+        )
+      ),
     [approvedOnly]
   );
 
@@ -114,12 +152,13 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return approvedOnly.filter((r) => {
+      const approvedBy = r.latestApprovedByName ?? r.approverName;
       if (yearFilter !== 'all' && r.year !== Number(yearFilter)) return false;
       if (monthFilter !== 'all' && r.month !== Number(monthFilter)) return false;
       if (preparerFilter !== 'all' && r.preparerName !== preparerFilter) return false;
-      if (approverFilter !== 'all' && r.approverName !== approverFilter) return false;
+      if (approverFilter !== 'all' && approvedBy !== approverFilter) return false;
       if (q) {
-        const hay = `${r.reportNumber} ${getMonthNameAr(r.month)} ${r.year} ${r.preparerName} ${r.approverName}`.toLowerCase();
+        const hay = `${r.reportNumber} ${getMonthNameAr(r.month)} ${r.year} ${r.preparerName} ${approvedBy}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -130,7 +169,9 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
     const totalApproved = approvedOnly.length;
     const currentYearCount = approvedOnly.filter((r) => r.year === currentYear).length;
     const latest = approvedOnly[0] ?? null;
-    const readyToArchive = approvedOnly.filter((r) => r.status === REPORT_STATUSES.APPROVED).length;
+    const readyToArchive = approvedOnly.filter(
+      (r) => (r.latestApprovedStatus ?? r.status) === REPORT_STATUSES.APPROVED
+    ).length;
     const totalVersions = approvedOnly.reduce((acc, r) => acc + Math.max(1, r.versionCount), 0);
     return { totalApproved, currentYearCount, latest, readyToArchive, totalVersions };
   }, [approvedOnly, currentYear]);
@@ -417,114 +458,124 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
                   </td>
                 </tr>
               ) : (
-                filtered.map((r, idx) => (
-                  <tr
-                    key={r.id}
-                    className={`transition-colors ${
-                      idx % 2 === 1 ? 'bg-[#F7FAFD] hover:bg-[#EDF4FC]' : 'bg-white hover:bg-[#F4F7FB]'
-                    }`}
-                  >
-                    <td className="py-2.5 px-3 font-mono font-bold text-[#0B2341] tabular-nums" dir="ltr">
-                      {r.reportNumber}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-semibold">
-                      {getMonthNameAr(r.month)}{' '}
-                      <span dir="ltr" className="tabular-nums">
-                        {r.year}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-xs text-slate-600 tabular-nums" dir="ltr">
-                      {formatDateWestern(r.preparedAt)}
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-[#0B2341]">{r.preparerName || '—'}</td>
-                    <td className="py-2.5 px-3 font-semibold text-[#069B74]">{r.approverName || '—'}</td>
-                    <td className="py-2.5 px-3 text-center font-mono text-xs text-slate-600 tabular-nums" dir="ltr">
-                      {formatDateWestern(r.approvedAt)}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold tabular-nums" dir="ltr">
-                      v{r.currentVersion}
-                    </td>
-                    <td className="py-2.5 px-3 text-center tabular-nums text-xs">
-                      <span dir="ltr">{formatNumber(r.totalReceived)}</span> طلب ·{' '}
-                      <span dir="ltr">{formatPct(r.completionRate, '—')}</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <span
-                        className={`inline-block px-2.5 py-1 rounded-md text-[11px] font-bold ${
-                          r.status === REPORT_STATUSES.ARCHIVED
-                            ? 'bg-[#0B2341] text-[#C8A85D]'
-                            : 'bg-emerald-50 text-[#069B74]'
-                        }`}
-                      >
-                        {STATUS_LABELS_AR[r.status]}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => onPreviewSnapshot(r.id, r.currentVersion)}
-                          title="معاينة وطباعة النسخة المعتمدة"
-                          className="p-1.5 rounded-lg bg-[#EAF4FC] text-[#1769AA] hover:bg-[#1769AA] hover:text-white transition-colors cursor-pointer"
+                filtered.map((r, idx) => {
+                  const row = resolveApprovedRow(r);
+                  return (
+                    <tr
+                      key={r.id}
+                      className={`transition-colors ${
+                        idx % 2 === 1 ? 'bg-[#F7FAFD] hover:bg-[#EDF4FC]' : 'bg-white hover:bg-[#F4F7FB]'
+                      }`}
+                    >
+                      <td className="py-2.5 px-3 font-mono font-bold text-[#0B2341] tabular-nums" dir="ltr">
+                        {r.reportNumber}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-semibold">
+                        {getMonthNameAr(r.month)}{' '}
+                        <span dir="ltr" className="tabular-nums">
+                          {r.year}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-xs text-slate-600 tabular-nums" dir="ltr">
+                        {formatDateWestern(row.preparedAt)}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-[#0B2341]">{r.preparerName || '—'}</td>
+                      <td className="py-2.5 px-3 font-semibold text-[#069B74]">{row.approvedByName || '—'}</td>
+                      <td className="py-2.5 px-3 text-center font-mono text-xs text-slate-600 tabular-nums" dir="ltr">
+                        {formatDateWestern(row.approvedAt)}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <span className="font-mono font-bold tabular-nums block" dir="ltr">
+                          v{row.approvedVersion}
+                        </span>
+                        {row.hasActiveRevision && (
+                          <span className="block text-[10px] font-bold text-[#9A7422] mt-0.5">
+                            تعديل جارٍ: <span dir="ltr" className="font-mono">v{r.currentVersion}</span>
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center tabular-nums text-xs">
+                        <span dir="ltr">{formatNumber(row.totalReceived)}</span> طلب ·{' '}
+                        <span dir="ltr">{formatPct(row.completionRate, '—')}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <span
+                          className={`inline-block px-2.5 py-1 rounded-md text-[11px] font-bold ${
+                            row.approvedStatus === REPORT_STATUSES.ARCHIVED
+                              ? 'bg-[#0B2341] text-[#C8A85D]'
+                              : 'bg-emerald-50 text-[#069B74]'
+                          }`}
                         >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onPreviewSnapshot(r.id, r.currentVersion)}
-                          title="طباعة التقرير"
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#0B2341] hover:bg-slate-50 transition-colors cursor-pointer"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
-                        {onExportPdf && (
+                          {STATUS_LABELS_AR[row.approvedStatus]}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center justify-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => onExportPdf(r.id, r.currentVersion)}
-                            disabled={exportingPdfKey === `${r.id}_${r.currentVersion}`}
-                            title="تصدير PDF الرسمي"
-                            className="p-1.5 rounded-lg bg-amber-50 text-[#9A7422] hover:bg-[#C99E4A] hover:text-[#0B2341] disabled:opacity-50 transition-colors cursor-pointer"
+                            onClick={() => onPreviewSnapshot(r.id, row.approvedVersion)}
+                            title="معاينة وطباعة النسخة المعتمدة"
+                            className="p-1.5 rounded-lg bg-[#EAF4FC] text-[#1769AA] hover:bg-[#1769AA] hover:text-white transition-colors cursor-pointer"
                           >
-                            {exportingPdfKey === `${r.id}_${r.currentVersion}` ? (
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onPreviewSnapshot(r.id, row.approvedVersion)}
+                            title="طباعة التقرير"
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#0B2341] hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+                          {onExportPdf && (
+                            <button
+                              type="button"
+                              onClick={() => onExportPdf(r.id, row.approvedVersion)}
+                              disabled={exportingPdfKey === `${r.id}_${row.approvedVersion}`}
+                              title="تصدير PDF الرسمي"
+                              className="p-1.5 rounded-lg bg-amber-50 text-[#9A7422] hover:bg-[#C99E4A] hover:text-[#0B2341] disabled:opacity-50 transition-colors cursor-pointer"
+                            >
+                              {exportingPdfKey === `${r.id}_${row.approvedVersion}` ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <FileText className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onExportExcel(r.id, row.approvedVersion)}
+                            disabled={exportingExcelKey === `${r.id}_${row.approvedVersion}`}
+                            title="تصدير Excel"
+                            className="p-1.5 rounded-lg bg-emerald-50 text-[#069B74] hover:bg-[#069B74] hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {exportingExcelKey === `${r.id}_${row.approvedVersion}` ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
-                              <FileText className="w-4 h-4" />
+                              <FileSpreadsheet className="w-4 h-4" />
                             )}
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => onExportExcel(r.id, r.currentVersion)}
-                          disabled={exportingExcelKey === `${r.id}_${r.currentVersion}`}
-                          title="تصدير Excel"
-                          className="p-1.5 rounded-lg bg-emerald-50 text-[#069B74] hover:bg-[#069B74] hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
-                        >
-                          {exportingExcelKey === `${r.id}_${r.currentVersion}` ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <FileSpreadsheet className="w-4 h-4" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onDownloadJson(r.id, r.currentVersion)}
-                          title="تنزيل نسخة أرشيفية معتمدة"
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#0B2341] transition-colors cursor-pointer"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onViewHistory(r.id)}
-                          title="عرض سجل الاعتماد والتدقيق"
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#1769AA] transition-colors cursor-pointer"
-                        >
-                          <History className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          <button
+                            type="button"
+                            onClick={() => onDownloadJson(r.id, row.approvedVersion)}
+                            title="تنزيل نسخة أرشيفية معتمدة"
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#0B2341] transition-colors cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onViewHistory(r.id)}
+                            title="عرض سجل الاعتماد والتدقيق"
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-[#1769AA] transition-colors cursor-pointer"
+                          >
+                            <History className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

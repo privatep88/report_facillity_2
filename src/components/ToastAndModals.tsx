@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Building2,
+  FilePenLine,
   FilePlus2,
   History,
   KeyRound,
+  Link2,
   Plus,
+  RotateCcw,
   Settings,
   Shield,
   UserCheck,
@@ -15,15 +19,23 @@ import type {
   AuthUser,
   MaintenanceCategory,
   MaintenanceSite,
+  MonthlyReportFull,
   PerformanceThresholds,
   ReportVersionSummary,
   UserRole,
 } from '../types/report.ts';
-import { ARABIC_MONTHS, ROLE_LABELS_AR, STATUS_LABELS_AR, USER_ROLES } from '../types/report.ts';
+import {
+  ARABIC_MONTHS,
+  REPORT_STATUSES,
+  ROLE_LABELS_AR,
+  STATUS_LABELS_AR,
+  USER_ROLES,
+} from '../types/report.ts';
 import type { DemoAccount } from '../api/client.ts';
 import { api } from '../api/client.ts';
 import { exportReportExcel } from '../services/ReportExportService.ts';
-import { formatDateTimeWestern, formatNumber } from '../utils/calculations.ts';
+import { formatDateTimeWestern, formatNumber, getMonthNameAr } from '../utils/calculations.ts';
+import { canEditPostApprovalReport, isAuthorizedPostApprovalOwner } from '../utils/postApprovalAccess.ts';
 import { SaaedModalFrame } from '../notifications/NotificationDialogs.tsx';
 import type { NotificationContextKey } from '../notifications/types.ts';
 import { NumericInput } from './NumericInput.tsx';
@@ -299,6 +311,7 @@ export const WorkflowActionModal: React.FC<{
     | 'approve'
     | 'archive'
     | 'create_revision'
+    | 'cancel_revision'
     | null;
   reportNumber: string;
   user: AuthUser | null;
@@ -383,13 +396,22 @@ export const WorkflowActionModal: React.FC<{
       context: 'archive',
     },
     create_revision: {
-      title: 'إنشاء إصدار جديد للتصحيح',
-      desc: `النسخة المعتمدة محمية من التعديل المباشر. سيتم فتح إصدار جديد يخضع لدورة اعتماد مستقلة مع حفظ النسخة السابقة.`,
+      title: 'تحرير التقرير بعد الاعتماد',
+      desc: `النسخة المعتمدة محمية من التعديل المباشر. سيتم فتح إصدار جديد يخضع لدورة مراجعة وتوقيع جديدة مع بقاء النسخة المعتمدة الحالية محفوظة.`,
       requireComment: true,
       btnLabel: 'فتح إصدار جديد',
       tone: 'bg-[#D99A22] hover:bg-[#b88119] text-[#082D56]',
       accent: 'amber',
       context: 'revision',
+    },
+    cancel_revision: {
+      title: 'إلغاء مسودة التعديل بعد الاعتماد',
+      desc: `سيتم إلغاء التغييرات غير المعتمدة على التقرير (${reportNumber}) واستعادة آخر نسخة معتمدة محفوظة دون المساس بسجل الإصدارات.`,
+      requireComment: false,
+      btnLabel: 'تأكيد إلغاء التعديل',
+      tone: 'bg-[#C94444] hover:bg-[#ad3636] text-white',
+      accent: 'red',
+      context: 'returned',
     },
   };
 
@@ -943,17 +965,256 @@ export const AdminSettingsModal: React.FC<{
   );
 };
 
+export interface PostApprovalEditTarget {
+  id: string;
+  reportNumber: string;
+  month: number;
+  year: number;
+  currentVersion: number;
+  preparerName: string;
+}
+
+export const PostApprovalEditConfirmModal: React.FC<{
+  open: boolean;
+  report: PostApprovalEditTarget | null;
+  currentUser: AuthUser | null;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+}> = ({ open, report, currentUser, onClose, onConfirm }) => {
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setReason('');
+      setErrorMsg(null);
+    }
+  }, [open, report?.id]);
+
+  if (!open || !report) return null;
+
+  const nextVersion = report.currentVersion + 1;
+  const nowStr = formatDateTimeWestern(new Date().toISOString());
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting) return;
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      setErrorMsg('يجب إدخال سبب تعديل التقرير المعتمد قبل فتح التحرير.');
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      await onConfirm(trimmed);
+      onClose();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'تعذر فتح إصدار تعديل التقرير المعتمد');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <SaaedModalFrame
+      open={open}
+      onClose={() => {
+        if (!submitting) onClose();
+      }}
+      disableBackdropClose={submitting}
+      titleAr="تأكيد تعديل تقرير معتمد"
+      titleEn="Confirm Post-Approval Revision"
+      subtitleAr={`رقم التقرير: ${report.reportNumber}`}
+      context="revision"
+      accentColor="gold"
+      size="md"
+      icon={<FilePenLine className="w-4 h-4 text-[#D5AD5D]" />}
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="p-3.5 rounded-xl bg-amber-50 border border-[#D5AD5D]/70 text-xs text-[#082D56] flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-[#9A7422] shrink-0 mt-0.5" />
+          <p className="leading-relaxed font-semibold">
+            أنت على وشك تعديل تقرير معتمد. سيتم الاحتفاظ بالنسخة المعتمدة الحالية كما هي في سجل الإصدارات
+            والأرشيف، وسيتم إنشاء إصدار جديد برقم{' '}
+            <span dir="ltr" className="font-mono font-extrabold text-[#9A7422]">
+              v{nextVersion}
+            </span>{' '}
+            للمراجعة والاعتماد.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-3.5 rounded-xl bg-[#EFF6FC] border border-[#10518C]/20 text-xs">
+          <div>
+            <span className="text-slate-500 block text-[11px]">رقم التقرير</span>
+            <span className="font-mono font-extrabold text-[#082D56] tabular-nums" dir="ltr">
+              {report.reportNumber}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block text-[11px]">الشهر / السنة</span>
+            <span className="font-bold text-[#082D56]">
+              {getMonthNameAr(report.month)}{' '}
+              <span dir="ltr" className="tabular-nums">
+                {report.year}
+              </span>
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block text-[11px]">رقم الإصدار الحالي</span>
+            <span className="font-mono font-extrabold text-[#07976E] tabular-nums" dir="ltr">
+              v{report.currentVersion} ← v{nextVersion}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block text-[11px]">معد التقرير الأصلي</span>
+            <span className="font-bold text-[#082D56]">{report.preparerName || 'غير محدد'}</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block text-[11px]">المستخدم المنفذ للتعديل</span>
+            <span className="font-bold text-[#082D56]">
+              {currentUser ? `${currentUser.fullName} (${ROLE_LABELS_AR[currentUser.role]})` : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block text-[11px]">التاريخ والوقت</span>
+            <span className="font-mono font-semibold text-slate-700 tabular-nums" dir="ltr">
+              {nowStr}
+            </span>
+          </div>
+        </div>
+
+        {errorMsg && (
+          <div className="p-3 rounded-xl bg-red-50 border border-[#C94444]/35 text-xs font-bold text-[#C94444]">
+            {errorMsg}
+          </div>
+        )}
+
+        <div>
+          <label htmlFor="post-approval-edit-reason" className="block text-xs font-bold text-[#082D56] mb-1.5">
+            سبب تعديل التقرير المعتمد <span className="text-[#C94444]">*</span>
+          </label>
+          <textarea
+            id="post-approval-edit-reason"
+            rows={3}
+            required
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value);
+              if (errorMsg) setErrorMsg(null);
+            }}
+            placeholder="اذكر سبب التعديل بعد الاعتماد بالتفصيل لتوثيقه في سجل التدقيق..."
+            className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-sm text-[#082D56] focus:border-[#10518C] focus:outline-none"
+          />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+          >
+            إلغاء
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-gradient-to-b from-[#082D56] to-[#0B2341] hover:from-[#10518C] hover:to-[#082D56] text-white border border-[#D5AD5D]/60 text-xs font-extrabold disabled:opacity-60 cursor-pointer"
+          >
+            <FilePenLine className="w-3.5 h-3.5 text-[#DFC076]" />
+            <span>{submitting ? 'جاري فتح التحرير...' : 'تأكيد وفتح التحرير'}</span>
+          </button>
+        </div>
+      </form>
+    </SaaedModalFrame>
+  );
+};
+
+export interface AuditHistoryReportMeta {
+  id: string;
+  reportNumber: string;
+  month: number;
+  year: number;
+  status: MonthlyReportFull['status'];
+  currentVersion: number;
+  preparerId?: string | null;
+  preparerName?: string;
+  isPostApprovalRevision?: boolean;
+  sourceApprovedVersion?: number | null;
+  revisionReason?: string | null;
+  revisionStartedByName?: string | null;
+  revisionStartedAt?: string | null;
+}
+
 export const AuditHistoryModal: React.FC<{
   open: boolean;
   onClose: () => void;
   approvals: ApprovalRecord[];
   auditLogs: AuditLogEntry[];
   versions: ReportVersionSummary[];
+  reportMeta?: AuditHistoryReportMeta | null;
+  currentUser?: AuthUser | null;
   onLoadVersion?: (versionNumber: number) => void;
   onExportVersionExcel?: (reportId: string, versionNumber: number) => void;
-}> = ({ open, onClose, approvals, auditLogs, versions, onLoadVersion, onExportVersionExcel }) => {
+  onRequestPostApprovalEdit?: () => void;
+  onOpenRevisionDraft?: (reportId: string) => void;
+  onCancelPostApprovalRevision?: (reportId: string) => void;
+  onLinkPreparer?: (reportId: string, preparerId: string) => Promise<void>;
+}> = ({
+  open,
+  onClose,
+  approvals,
+  auditLogs,
+  versions,
+  reportMeta = null,
+  currentUser = null,
+  onLoadVersion,
+  onExportVersionExcel,
+  onRequestPostApprovalEdit,
+  onOpenRevisionDraft,
+  onCancelPostApprovalRevision,
+  onLinkPreparer,
+}) => {
   const [subTab, setSubTab] = useState<'approvals' | 'audit' | 'versions'>('approvals');
   const [exportingVersion, setExportingVersion] = useState<number | null>(null);
+  const [adminCandidates, setAdminCandidates] = useState<AuthUser[]>([]);
+  const [selectedPreparerId, setSelectedPreparerId] = useState('');
+  const [linkingPreparer, setLinkingPreparer] = useState(false);
+
+  const canPostApprovalEdit = canEditPostApprovalReport(currentUser, reportMeta);
+  const isRevisionActive = Boolean(
+    reportMeta?.isPostApprovalRevision &&
+      reportMeta.status !== REPORT_STATUSES.APPROVED &&
+      reportMeta.status !== REPORT_STATUSES.ARCHIVED
+  );
+  const canActOnActiveRevision = isRevisionActive && isAuthorizedPostApprovalOwner(currentUser, reportMeta);
+  const needsAdminLegacyLink = Boolean(
+    open &&
+      currentUser?.role === USER_ROLES.ADMIN &&
+      reportMeta &&
+      !reportMeta.preparerId &&
+      onLinkPreparer
+  );
+
+  useEffect(() => {
+    if (!needsAdminLegacyLink) return;
+    api
+      .getAdminUsers()
+      .then((res) => {
+        const eligible = res.users.filter(
+          (u) => u.isActive && (u.role === USER_ROLES.PREPARER || u.role === USER_ROLES.ADMIN)
+        );
+        setAdminCandidates(eligible);
+        if (eligible.length > 0) {
+          setSelectedPreparerId((prev) => prev || eligible[0].id);
+        }
+      })
+      .catch(() => {});
+  }, [needsAdminLegacyLink]);
+
+  const maxApprovedVersion = versions.reduce((max, v) => Math.max(max, v.versionNumber), 0);
 
   return (
     <SaaedModalFrame
@@ -961,12 +1222,121 @@ export const AuditHistoryModal: React.FC<{
       onClose={onClose}
       titleAr="سجل الاعتمادات والتدقيق والإصدارات"
       titleEn="Approvals, Audit Trail & Versions"
+      subtitleAr={reportMeta ? `التقرير: ${reportMeta.reportNumber}` : undefined}
       context="archive"
       accentColor="gold"
       size="xl"
       showVisualBanner={false}
       icon={<History className="w-4 h-4 text-[#D5AD5D]" />}
     >
+      {/* Post-Approval Edit Controls (Strict RBAC: Admin OR original preparer UID only) */}
+      {canPostApprovalEdit && onRequestPostApprovalEdit && (
+        <div className="mb-3.5 p-3.5 rounded-xl bg-gradient-to-l from-[#082D56]/5 via-[#EFF6FC] to-[#FDF9EE] border border-[#D5AD5D]/60 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-[#082D56] space-y-0.5">
+            <p className="font-extrabold">تحرير التقرير بعد الاعتماد</p>
+            <p className="text-[11px] text-slate-600">
+              النسخة المعتمدة الحالية (
+              <span dir="ltr" className="font-mono font-bold">
+                v{reportMeta?.currentVersion}
+              </span>
+              ) محمية من التعديل المباشر. سيُفتح إصدار جديد مع بقاء النسخة المعتمدة محفوظة في الأرشيف.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRequestPostApprovalEdit}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#082D56] hover:bg-[#10518C] text-white border border-[#D5AD5D]/70 text-xs font-extrabold shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <FilePenLine className="w-4 h-4 text-[#DFC076]" />
+            <span>تحرير التقرير بعد الاعتماد</span>
+          </button>
+        </div>
+      )}
+
+      {isRevisionActive && reportMeta && (
+        <div className="mb-3.5 p-3.5 rounded-xl bg-amber-50/90 border border-[#D5AD5D]/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="space-y-0.5 text-[#082D56]">
+            <p className="font-extrabold">
+              قيد تعديل تقرير معتمد — الإصدار{' '}
+              <span dir="ltr" className="font-mono text-[#9A7422]">
+                v{reportMeta.currentVersion}
+              </span>{' '}
+              (استناداً إلى{' '}
+              <span dir="ltr" className="font-mono">
+                v{reportMeta.sourceApprovedVersion ?? maxApprovedVersion}
+              </span>
+              )
+            </p>
+            <p className="text-[11px] text-slate-600">
+              السبب: {reportMeta.revisionReason || '—'} · فتح التعديل:{' '}
+              {reportMeta.revisionStartedByName || '—'}
+            </p>
+          </div>
+          {canActOnActiveRevision && (
+            <div className="flex flex-wrap items-center gap-2">
+              {onOpenRevisionDraft && (
+                <button
+                  type="button"
+                  onClick={() => onOpenRevisionDraft(reportMeta.id)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#082D56] hover:bg-[#10518C] text-white text-xs font-bold cursor-pointer"
+                >
+                  <FilePenLine className="w-3.5 h-3.5 text-[#DFC076]" />
+                  <span>فتح مسودة التعديل</span>
+                </button>
+              )}
+              {onCancelPostApprovalRevision && (
+                <button
+                  type="button"
+                  onClick={() => onCancelPostApprovalRevision(reportMeta.id)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white hover:bg-red-50 text-[#C94444] border border-[#C94444]/40 text-xs font-bold cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>إلغاء التعديل</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {needsAdminLegacyLink && adminCandidates.length > 0 && reportMeta && onLinkPreparer && (
+        <div className="mb-3.5 p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-[#082D56]">
+            <Link2 className="w-4 h-4 text-[#10518C] shrink-0" />
+            <span>تقرير قديم دون معرف معد مرتبط (`preparerId`): اربطه بحساب معد التقرير الأصلي لتفعيل صلاحيته:</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedPreparerId}
+              onChange={(e) => setSelectedPreparerId(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold"
+            >
+              {adminCandidates.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName} ({ROLE_LABELS_AR[u.role]})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!selectedPreparerId || linkingPreparer}
+              onClick={async () => {
+                if (!selectedPreparerId) return;
+                setLinkingPreparer(true);
+                try {
+                  await onLinkPreparer(reportMeta.id, selectedPreparerId);
+                } finally {
+                  setLinkingPreparer(false);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg bg-[#082D56] hover:bg-[#10518C] text-white text-xs font-bold disabled:opacity-60 cursor-pointer"
+            >
+              {linkingPreparer ? 'جاري الربط...' : 'ربط معرف المعد'}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2 bg-[#EFF6FC] p-1 rounded-xl w-fit">
         <button
           type="button"
@@ -993,11 +1363,11 @@ export const AuditHistoryModal: React.FC<{
             subTab === 'versions' ? 'bg-[#082D56] text-white' : 'text-slate-600'
           }`}
         >
-          الإصدارات المعتمدة (<span dir="ltr" className="tabular-nums">{formatNumber(versions.length)}</span>)
+          سجل إصدارات التقرير (<span dir="ltr" className="tabular-nums">{formatNumber(versions.length)}</span>)
         </button>
       </div>
 
-      <div className="mt-4 max-h-[60vh] overflow-y-auto fm-scroll">
+      <div className="mt-4 max-h-[56vh] overflow-y-auto fm-scroll">
         {subTab === 'approvals' && (
           <div className="space-y-2.5">
             {approvals.length === 0 ? (
@@ -1051,32 +1421,53 @@ export const AuditHistoryModal: React.FC<{
                 <tr>
                   <th className="py-2 px-3 text-start">التاريخ والوقت</th>
                   <th className="py-2 px-3 text-start">المستخدم</th>
-                  <th className="py-2 px-3 text-start">العملية</th>
-                  <th className="py-2 px-3 text-start">التفاصيل / السبب</th>
+                  <th className="py-2 px-3 text-start">العملية / الحقل</th>
+                  <th className="py-2 px-3 text-start">التفاصيل والقيم (قبل ← بعد)</th>
                   <th className="py-2 px-3 text-center">الإصدار</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {auditLogs.map((l) => (
-                  <tr key={l.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 font-mono text-[11px] whitespace-nowrap tabular-nums" dir="ltr">
-                      {formatDateTimeWestern(l.createdAt)}
-                    </td>
-                    <td className="py-2 px-3 font-semibold text-[#082D56]">
-                      {l.userName}
-                      <span className="block text-[10px] text-slate-400">
-                        {ROLE_LABELS_AR[l.userRole as UserRole] || l.userRole}
-                      </span>
-                    </td>
-                    <td className="py-2 px-3 text-slate-700">{l.action}</td>
-                    <td className="py-2 px-3 text-slate-600">
-                      {l.reason || `${l.previousValue} → ${l.newValue}`}
-                    </td>
-                    <td className="py-2 px-3 text-center font-mono tabular-nums" dir="ltr">
-                      v{l.versionNumber}
-                    </td>
-                  </tr>
-                ))}
+                {auditLogs.map((l) => {
+                  const hasDiffValues = Boolean(l.previousValue || l.newValue) && l.previousValue !== l.newValue;
+                  return (
+                    <tr key={l.id} className="hover:bg-slate-50 align-top">
+                      <td className="py-2 px-3 font-mono text-[11px] whitespace-nowrap tabular-nums" dir="ltr">
+                        {formatDateTimeWestern(l.createdAt)}
+                      </td>
+                      <td className="py-2 px-3 font-semibold text-[#082D56]">
+                        {l.userName}
+                        <span className="block text-[10px] text-slate-400">
+                          {ROLE_LABELS_AR[l.userRole as UserRole] || l.userRole}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-800 font-semibold">
+                        {l.action}
+                        {l.fieldPath && l.fieldPath !== 'report' && (
+                          <span className="block text-[10px] font-mono text-slate-400 mt-0.5" dir="ltr">
+                            {l.fieldPath}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-slate-600 space-y-1">
+                        {l.reason && <p className="font-semibold text-[#082D56]">{l.reason}</p>}
+                        {hasDiffValues && (
+                          <p className="text-[11px] text-slate-600">
+                            <span className="bg-red-50 text-[#C94444] px-1.5 py-0.5 rounded font-mono">
+                              {l.previousValue || '—'}
+                            </span>{' '}
+                            ←{' '}
+                            <span className="bg-emerald-50 text-[#07976E] px-1.5 py-0.5 rounded font-mono">
+                              {l.newValue || '—'}
+                            </span>
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-center font-mono tabular-nums" dir="ltr">
+                        v{l.versionNumber}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1084,64 +1475,120 @@ export const AuditHistoryModal: React.FC<{
 
         {subTab === 'versions' && (
           <div className="space-y-2.5">
-            {versions.length === 0 ? (
+            {isRevisionActive && reportMeta && (
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-[#D5AD5D] bg-amber-50/75">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-extrabold text-[#082D56]">
+                      الإصدار{' '}
+                      <span className="font-mono text-[#9A7422] tabular-nums" dir="ltr">
+                        v{reportMeta.currentVersion}
+                      </span>
+                    </p>
+                    <span className="px-2 py-0.5 rounded bg-white border border-[#D5AD5D] text-[10.5px] font-extrabold text-[#9A7422]">
+                      قيد تعديل تقرير معتمد
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-700">
+                    معد التعديل: {reportMeta.revisionStartedByName || '—'} · السبب: {reportMeta.revisionReason || '—'}
+                  </p>
+                  {reportMeta.revisionStartedAt && (
+                    <p className="text-[11px] text-slate-500 font-mono tabular-nums" dir="ltr">
+                      {formatDateTimeWestern(reportMeta.revisionStartedAt)}
+                    </p>
+                  )}
+                </div>
+                {canActOnActiveRevision && onOpenRevisionDraft && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenRevisionDraft(reportMeta.id)}
+                    className="px-3 py-1.5 rounded-lg bg-[#082D56] hover:bg-[#10518C] text-white text-xs font-bold cursor-pointer"
+                  >
+                    فتح مسودة التعديل
+                  </button>
+                )}
+              </div>
+            )}
+
+            {versions.length === 0 && !isRevisionActive ? (
               <p className="text-sm text-slate-500 py-8 text-center">لم يتم اعتماد أي إصدار ثابت بعد.</p>
             ) : (
-              versions.map((v) => (
-                <div
-                  key={v.id}
-                  className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-white"
-                >
-                  <div>
-                    <p className="text-sm font-bold text-[#082D56]">
-                      الإصدار المعتمد{' '}
-                      <span className="font-mono text-[#07976E] tabular-nums" dir="ltr">
-                        v{v.versionNumber}
-                      </span>
-                    </p>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      اعتماد: {v.approvedByName} · التوقيع:{' '}
-                      <span className="font-mono text-[#10518C]" dir="ltr">
-                        {v.signatureToken}
-                      </span>
-                    </p>
-                    <p className="text-[11px] text-slate-400 font-mono tabular-nums" dir="ltr">
-                      {formatDateTimeWestern(v.createdAt)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {onLoadVersion && (
+              versions.map((v) => {
+                const isLatestApproved = v.versionNumber === maxApprovedVersion;
+                return (
+                  <div
+                    key={v.id}
+                    className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-white"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-bold text-[#082D56]">
+                          الإصدار المعتمد{' '}
+                          <span className="font-mono text-[#07976E] tabular-nums" dir="ltr">
+                            v{v.versionNumber}
+                          </span>
+                        </p>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10.5px] font-extrabold ${
+                            isLatestApproved
+                              ? 'bg-emerald-50 text-[#07976E] border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          {isLatestApproved ? 'معتمد حالي' : 'معتمد سابقاً'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        اعتماد: {v.approvedByName}
+                        {v.editedByName ? ` · تعديل: ${v.editedByName}` : ''}
+                        {' · '}التوقيع:{' '}
+                        <span className="font-mono text-[#10518C]" dir="ltr">
+                          {v.signatureToken}
+                        </span>
+                      </p>
+                      {v.revisionReason && (
+                        <p className="text-[11px] text-[#082D56] bg-[#EFF6FC] px-2 py-1 rounded border border-[#10518C]/15 mt-1">
+                          سبب الإصدار: {v.revisionReason}
+                        </p>
+                      )}
+                      <p className="text-[11px] text-slate-400 font-mono tabular-nums" dir="ltr">
+                        {formatDateTimeWestern(v.createdAt)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {onLoadVersion && (
+                        <button
+                          type="button"
+                          onClick={() => onLoadVersion(v.versionNumber)}
+                          className="px-3 py-1.5 rounded-lg bg-[#EFF6FC] hover:bg-[#10518C] hover:text-white text-[#10518C] text-xs font-bold transition-colors cursor-pointer"
+                        >
+                          معاينة النسخة المعتمدة
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => onLoadVersion(v.versionNumber)}
-                        className="px-3 py-1.5 rounded-lg bg-[#EFF6FC] hover:bg-[#10518C] hover:text-white text-[#10518C] text-xs font-bold transition-colors cursor-pointer"
+                        disabled={exportingVersion === v.versionNumber}
+                        onClick={async () => {
+                          if (onExportVersionExcel) {
+                            onExportVersionExcel(v.reportId, v.versionNumber);
+                            return;
+                          }
+                          setExportingVersion(v.versionNumber);
+                          try {
+                            await exportReportExcel({ reportId: v.reportId, versionNumber: v.versionNumber });
+                          } finally {
+                            setExportingVersion((cur) => (cur === v.versionNumber ? null : cur));
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-[#07976E] hover:bg-[#05805d] disabled:opacity-60 text-white text-xs font-bold transition-colors cursor-pointer"
                       >
-                        معاينة النسخة المعتمدة
+                        {exportingVersion === v.versionNumber ? 'جارٍ التصدير...' : 'تصدير Excel'} (
+                        <span dir="ltr">v{v.versionNumber}</span>)
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={exportingVersion === v.versionNumber}
-                      onClick={async () => {
-                        if (onExportVersionExcel) {
-                          onExportVersionExcel(v.reportId, v.versionNumber);
-                          return;
-                        }
-                        setExportingVersion(v.versionNumber);
-                        try {
-                          await exportReportExcel({ reportId: v.reportId, versionNumber: v.versionNumber });
-                        } finally {
-                          setExportingVersion((cur) => (cur === v.versionNumber ? null : cur));
-                        }
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-[#07976E] hover:bg-[#05805d] disabled:opacity-60 text-white text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      {exportingVersion === v.versionNumber ? 'جارٍ التصدير...' : 'تصدير Excel'} (
-                      <span dir="ltr">v{v.versionNumber}</span>)
-                    </button>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}

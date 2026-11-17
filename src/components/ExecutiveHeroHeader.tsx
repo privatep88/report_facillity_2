@@ -272,8 +272,18 @@ export const ReportSilverInfoStrip: React.FC<{
         <div className="flex items-center gap-2 lg:px-3">
           <ShieldCheck className="w-4 h-4 text-[#1769AA] shrink-0" />
           <span className="text-slate-600 font-semibold whitespace-nowrap">حالة التقرير:</span>
-          <span className={`px-2 py-0.5 rounded-md border font-extrabold text-[11px] whitespace-nowrap ${statusTone}`}>
-            {STATUS_LABELS_AR[activeReport.status]}
+          <span
+            className={`px-2 py-0.5 rounded-md border font-extrabold text-[11px] whitespace-nowrap ${
+              activeReport.isPostApprovalRevision &&
+              activeReport.status !== 'approved' &&
+              activeReport.status !== 'archived'
+                ? 'text-[#9A7422] bg-amber-50 border-[#D5AD5D]/60'
+                : statusTone
+            }`}
+          >
+            {activeReport.isPostApprovalRevision && activeReport.status === 'draft'
+              ? 'قيد تعديل تقرير معتمد'
+              : STATUS_LABELS_AR[activeReport.status]}
           </span>
         </div>
       </div>

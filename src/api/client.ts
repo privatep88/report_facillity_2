@@ -323,10 +323,12 @@ export const api = {
       | 'forward_approval'
       | 'approve'
       | 'archive'
-      | 'create_revision',
+      | 'create_revision'
+      | 'cancel_revision',
     comment = '',
     approverName?: string,
-    approverTitle?: string
+    approverTitle?: string,
+    expectedVersion?: number
   ) =>
     request<{
       report: MonthlyReportFull;
@@ -339,9 +341,34 @@ export const api = {
       `/api/reports/${encodeURIComponent(id)}/workflow`,
       {
         method: 'POST',
-        body: JSON.stringify({ action, comment, approverName, approverTitle }),
+        body: JSON.stringify({ action, comment, approverName, approverTitle, expectedVersion }),
       },
-      () => staticFallbackApi.workflowAction(id, action, comment, approverName, approverTitle)
+      () =>
+        staticFallbackApi.workflowAction(
+          id,
+          action,
+          comment,
+          approverName,
+          approverTitle,
+          expectedVersion
+        )
+    ),
+
+  linkPreparerOwnership: (id: string, preparerId: string) =>
+    request<{
+      report: MonthlyReportFull;
+      history: {
+        approvals: ApprovalRecord[];
+        auditLogs: AuditLogEntry[];
+        versions: ReportVersionSummary[];
+      };
+    }>(
+      `/api/reports/${encodeURIComponent(id)}/link-preparer`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ preparerId }),
+      },
+      () => staticFallbackApi.linkPreparerOwnership(id, preparerId)
     ),
 
   addSite: (nameAr: string, nameEn: string) =>

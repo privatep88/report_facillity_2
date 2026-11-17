@@ -235,6 +235,9 @@ export interface ReportVersionSummary {
   approvedByName: string;
   signatureToken: string;
   createdAt: string;
+  revisionReason?: string | null;
+  sourceApprovedVersion?: number | null;
+  editedByName?: string | null;
 }
 
 export interface MonthlyReportFull {
@@ -248,6 +251,15 @@ export interface MonthlyReportFull {
   classification: string;
   status: ReportStatus;
   currentVersion: number;
+  isPostApprovalRevision?: boolean;
+  revisionReason?: string | null;
+  revisionStartedById?: string | null;
+  revisionStartedByName?: string | null;
+  revisionStartedByRole?: string | null;
+  revisionStartedAt?: string | null;
+  sourceApprovedVersion?: number | null;
+  lockVersion?: number;
+  expectedLockVersion?: number;
   preparerId: string | null;
   preparerName: string;
   preparerTitle: string;
@@ -295,6 +307,7 @@ export interface ReportListSummary {
   department: string;
   status: ReportStatus;
   currentVersion: number;
+  preparerId: string | null;
   preparerName: string;
   approverName: string;
   preparedAt: string | null;
@@ -307,4 +320,16 @@ export interface ReportListSummary {
   totalFaults: number;
   totalCostAed: number;
   versionCount: number;
+  isPostApprovalRevision?: boolean;
+  revisionReason?: string | null;
+  revisionStartedByName?: string | null;
+  revisionStartedAt?: string | null;
+  sourceApprovedVersion?: number | null;
+  latestApprovedVersion?: number | null;
+  latestApprovedAt?: string | null;
+  latestApprovedByName?: string | null;
+  latestApprovedPreparedAt?: string | null;
+  latestApprovedStatus?: ReportStatus | null;
+  latestApprovedTotalReceived?: number | null;
+  latestApprovedCompletionRate?: number | null;
 }
