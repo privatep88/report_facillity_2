@@ -833,10 +833,31 @@ export default function App() {
       }
     );
     try {
-      const { filename } = await exportReportExcel({ reportId, versionNumber });
+      const liveData =
+        snapshotPreview &&
+        snapshotPreview.report.id === reportId &&
+        versionNumber === snapshotPreview.versionNumber
+          ? {
+              report: snapshotPreview.report,
+              sites: snapshotPreview.sites,
+              categories: snapshotPreview.categories,
+              thresholds: snapshotPreview.thresholds,
+              snapshotVersion: snapshotPreview.versionNumber,
+            }
+          : activeReport && activeReport.id === reportId && versionNumber == null
+            ? {
+                report: activeReport,
+                sites,
+                categories,
+                thresholds,
+                snapshotVersion: null,
+              }
+            : undefined;
+
+      const { filename } = await exportReportExcel({ reportId, versionNumber, liveData });
       notifySuccess(
         'تم إنشاء ملف Excel بنجاح.',
-        `تم تنزيل المصنف الاحترافي ${filename} شاملاً البطاقات والصور والمعادلات والرسوم.`,
+        `تم تنزيل المصنف الاحترافي ${filename} شاملاً كافة الأقسام الـ 12 والبطاقات والصور والمعادلات والرسوم.`,
         {
           dedupeKey: `excel_ok_${key}`,
           context: 'excel',
@@ -1203,6 +1224,9 @@ export default function App() {
             setHistoryModalOpen(false);
             handleOpenSnapshotPreview(activeReport.id, ver);
           }
+        }}
+        onExportVersionExcel={(reportId, ver) => {
+          void handleExportExcel(reportId, ver);
         }}
       />
 

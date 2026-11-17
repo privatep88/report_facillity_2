@@ -221,6 +221,7 @@ export const AnalyticsTab: React.FC = () => {
     try {
       const { filename } = await exportAnalyticsExcel({
         filters: filterPayload,
+        data: bi,
       });
       notifySuccess(
         'تم تصدير مصنف التحليلات التنفيذية (Excel)',

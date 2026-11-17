@@ -22,6 +22,7 @@ import type {
 import { ARABIC_MONTHS, ROLE_LABELS_AR, STATUS_LABELS_AR, USER_ROLES } from '../types/report.ts';
 import type { DemoAccount } from '../api/client.ts';
 import { api } from '../api/client.ts';
+import { exportReportExcel } from '../services/ReportExportService.ts';
 import { formatDateTimeWestern, formatNumber } from '../utils/calculations.ts';
 import { SaaedModalFrame } from '../notifications/NotificationDialogs.tsx';
 import type { NotificationContextKey } from '../notifications/types.ts';
@@ -949,8 +950,10 @@ export const AuditHistoryModal: React.FC<{
   auditLogs: AuditLogEntry[];
   versions: ReportVersionSummary[];
   onLoadVersion?: (versionNumber: number) => void;
-}> = ({ open, onClose, approvals, auditLogs, versions, onLoadVersion }) => {
+  onExportVersionExcel?: (reportId: string, versionNumber: number) => void;
+}> = ({ open, onClose, approvals, auditLogs, versions, onLoadVersion, onExportVersionExcel }) => {
   const [subTab, setSubTab] = useState<'approvals' | 'audit' | 'versions'>('approvals');
+  const [exportingVersion, setExportingVersion] = useState<number | null>(null);
 
   return (
     <SaaedModalFrame
@@ -1116,12 +1119,26 @@ export const AuditHistoryModal: React.FC<{
                         معاينة النسخة المعتمدة
                       </button>
                     )}
-                    <a
-                      href={`/api/reports/${encodeURIComponent(v.reportId)}/export/excel?version=${v.versionNumber}`}
-                      className="px-3 py-1.5 rounded-lg bg-[#07976E] hover:bg-[#05805d] text-white text-xs font-bold"
+                    <button
+                      type="button"
+                      disabled={exportingVersion === v.versionNumber}
+                      onClick={async () => {
+                        if (onExportVersionExcel) {
+                          onExportVersionExcel(v.reportId, v.versionNumber);
+                          return;
+                        }
+                        setExportingVersion(v.versionNumber);
+                        try {
+                          await exportReportExcel({ reportId: v.reportId, versionNumber: v.versionNumber });
+                        } finally {
+                          setExportingVersion((cur) => (cur === v.versionNumber ? null : cur));
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#07976E] hover:bg-[#05805d] disabled:opacity-60 text-white text-xs font-bold transition-colors cursor-pointer"
                     >
-                      تصدير Excel (<span dir="ltr">v{v.versionNumber}</span>)
-                    </a>
+                      {exportingVersion === v.versionNumber ? 'جارٍ التصدير...' : 'تصدير Excel'} (
+                      <span dir="ltr">v{v.versionNumber}</span>)
+                    </button>
                   </div>
                 </div>
               ))
