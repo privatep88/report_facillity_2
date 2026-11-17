@@ -408,9 +408,6 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
     return { filledChallenges, filledRecs };
   }, [report.challenges]);
 
-  const isApprovedOrArchived =
-    report.status === REPORT_STATUSES.APPROVED || report.status === REPORT_STATUSES.ARCHIVED;
-
   const handleAddService = () => {
     const nameAr = newServiceDraft.nameAr.trim();
     const nameEn = newServiceDraft.nameEn.trim() || nameAr;

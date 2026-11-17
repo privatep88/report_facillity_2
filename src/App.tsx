@@ -915,7 +915,7 @@ export default function App() {
   const handleExportPdf = async (
     reportId: string,
     versionNumber?: number,
-    orientation: 'landscape' | 'portrait' = 'landscape'
+    orientation: 'landscape' | 'portrait' = 'portrait'
   ) => {
     const key = `${reportId}_${versionNumber ?? 'live'}`;
     if (exportingPdfKey === key) return;

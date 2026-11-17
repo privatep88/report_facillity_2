@@ -37,7 +37,7 @@ export async function exportReportPdf(params: {
   orientation?: 'landscape' | 'portrait';
   liveData?: DirectReportSnapshotData;
 }): Promise<ExportResult> {
-  const { reportId, versionNumber, orientation = 'landscape', liveData } = params;
+  const { reportId, versionNumber, orientation = 'portrait', liveData } = params;
   const res = await exportReportDirectPdf({
     reportId,
     versionNumber,
@@ -152,7 +152,7 @@ export async function prepareAndTriggerPrint(params: {
   orientation?: 'landscape' | 'portrait';
   container?: HTMLElement | null;
 }): Promise<void> {
-  const { orientation = 'landscape', container } = params;
+  const { orientation = 'portrait', container } = params;
 
   try {
     if (document.fonts && document.fonts.ready) {

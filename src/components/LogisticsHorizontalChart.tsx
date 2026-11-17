@@ -115,25 +115,119 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
     return 'linear-gradient(270deg, #1E5A8A 0%, #247DC1 100%)';
   };
 
+  if (isPrint) {
+    return (
+      <div
+        dir="rtl"
+        className={`relative rounded-lg border border-[#C5D8EE] bg-gradient-to-b from-white to-[#F7FAFE] px-2.5 py-1.5 select-none ${className}`}
+        style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-[#E3EDF7] pb-1 mb-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="w-1.5 h-4 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
+            <h4 className="text-[10px] font-extrabold text-[#0C2544] leading-tight">
+              التوزيع التنازلي لقنوات الدعم اللوجستي
+            </h4>
+          </div>
+          <div className="flex items-center gap-1.5 rounded bg-[#0C2544] text-white border border-[#C6A35E]/60 px-2 py-0.5 shrink-0 text-[8.5px]">
+            <Truck className="w-3 h-3 text-[#DFC076] shrink-0" />
+            <span className="font-bold text-[#EAF2FA]/90">إجمالي الطلبات:</span>
+            <span className="font-black text-[#DFC076] tabular-nums" dir="ltr">
+              {formatNumber(totalRequests)}
+            </span>
+            <span className="font-bold text-white/90">طلباً</span>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          {sortedRows.map((row) => (
+            <div
+              key={row.channelKey}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '118px 1fr 64px 46px',
+                alignItems: 'center',
+                columnGap: '6px',
+              }}
+              className={`px-1.5 py-[3px] rounded-md ${
+                row.isTopChannel
+                  ? 'bg-[#EAF2FA]/80 border border-[#C6A35E]/60'
+                  : 'bg-white border border-[#E6EEF8]'
+              }`}
+            >
+              {/* Col 1: Rank + Channel Name (no truncate) */}
+              <div className="flex items-center gap-1 min-w-0">
+                <span
+                  className={`w-4 h-4 text-[8.5px] rounded font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
+                    row.isTopChannel
+                      ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]'
+                      : 'bg-[#EAF2FA] text-[#0C2544]'
+                  }`}
+                  dir="ltr"
+                >
+                  {formatNumber(row.rank)}
+                </span>
+                <span className="text-[9.2px] font-extrabold text-[#0C2544] leading-tight break-words">
+                  {row.nameAr}
+                </span>
+              </div>
+
+              {/* Col 2: Proportional Bar */}
+              <div className="w-full h-3 rounded bg-[#EAF2FA] border border-[#D5E4F4] overflow-hidden p-[1px] flex items-center">
+                {row.requestCount > 0 ? (
+                  <div
+                    className="h-full rounded-xs"
+                    style={{
+                      width: `${row.widthPct}%`,
+                      background: getBarBackground(row),
+                    }}
+                  />
+                ) : (
+                  <div className="h-full w-1 rounded-xs bg-slate-300" />
+                )}
+              </div>
+
+              {/* Col 3: Request Count */}
+              <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                <span className="text-[9.5px] font-black text-[#0C2544] tabular-nums" dir="ltr">
+                  {formatNumber(row.requestCount)}
+                </span>
+                <span className="text-[8.5px] font-bold text-slate-600">طلباً</span>
+              </div>
+
+              {/* Col 4: Share Percentage */}
+              <span
+                className={`w-full text-center py-[1px] px-1 rounded text-[9px] font-extrabold tabular-nums whitespace-nowrap ${
+                  row.isTopChannel
+                    ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]/60'
+                    : row.requestCount > 0
+                      ? 'bg-[#EAF2FA] text-[#1769AA]'
+                      : 'bg-slate-100 text-slate-500'
+                }`}
+                dir="ltr"
+              >
+                {formatPercentage(row.sharePct)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       dir="rtl"
-      className={`relative rounded-xl border border-[#D5E3F2] bg-gradient-to-b from-white to-[#F7FAFE] ${
-        isPrint ? 'p-2.5' : 'p-3.5'
-      } shadow-2xs select-none ${className}`}
+      className={`relative rounded-xl border border-[#D5E3F2] bg-gradient-to-b from-white to-[#F7FAFE] p-3.5 shadow-2xs select-none ${className}`}
       style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
       onMouseLeave={() => setActiveKey(null)}
     >
       {/* Top Header & Total Logistics Requests Mini Card */}
-      <div
-        className={`flex flex-wrap items-center justify-between gap-2 border-b border-[#E3EDF7] ${
-          isPrint ? 'pb-2 mb-2' : 'pb-2.5 mb-3'
-        }`}
-      >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E3EDF7] pb-2.5 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-1.5 h-6 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
           <div className="min-w-0">
-            <h4 className={`${isPrint ? 'text-[11px]' : 'text-xs'} font-extrabold text-[#0C2544] leading-tight`}>
+            <h4 className="text-xs font-extrabold text-[#0C2544] leading-tight">
               التوزيع التنازلي لقنوات الدعم اللوجستي
             </h4>
             <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
@@ -143,11 +237,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
         </div>
 
         {/* بطاقة إجمالي طلبات الدعم اللوجستي */}
-        <div
-          className={`flex items-center gap-2.5 rounded-lg bg-[#0C2544] text-white border border-[#C6A35E]/60 ${
-            isPrint ? 'px-2.5 py-1' : 'px-3 py-1.5'
-          } shadow-2xs shrink-0`}
-        >
+        <div className="flex items-center gap-2.5 rounded-lg bg-[#0C2544] text-white border border-[#C6A35E]/60 px-3 py-1.5 shadow-2xs shrink-0">
           <div className="w-6 h-6 rounded-md bg-[#C6A35E]/20 border border-[#C6A35E]/50 flex items-center justify-center shrink-0">
             <Truck className="w-3.5 h-3.5 text-[#DFC076]" />
           </div>
@@ -157,7 +247,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
             </span>
             <div className="flex items-baseline gap-1 mt-0.5">
               <span
-                className={`${isPrint ? 'text-xs' : 'text-sm'} font-extrabold text-[#DFC076] tabular-nums leading-none`}
+                className="text-sm font-extrabold text-[#DFC076] tabular-nums leading-none"
                 dir="ltr"
               >
                 {formatNumber(totalRequests)}
@@ -169,7 +259,7 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
       </div>
 
       {/* Interactive Floating Executive Tooltip (when a channel is hovered/focused/touched) */}
-      {!isPrint && activeRow && (
+      {activeRow && (
         <div
           role="status"
           aria-live="polite"
@@ -203,22 +293,22 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
       )}
 
       {/* Horizontal Bar Rows */}
-      <div className={isPrint ? 'space-y-1.5' : 'space-y-2'}>
+      <div className="space-y-2">
         {sortedRows.map((row) => {
           const isHovered = activeKey === row.channelKey;
           return (
             <div
               key={row.channelKey}
-              tabIndex={isPrint ? -1 : 0}
+              tabIndex={0}
               role="group"
               aria-label={`${row.nameAr}: ${formatNumber(row.requestCount)} طلباً — ${formatPercentage(row.sharePct)}`}
-              onMouseEnter={() => !isPrint && setActiveKey(row.channelKey)}
-              onFocus={() => !isPrint && setActiveKey(row.channelKey)}
-              onBlur={() => !isPrint && setActiveKey(null)}
+              onMouseEnter={() => setActiveKey(row.channelKey)}
+              onFocus={() => setActiveKey(row.channelKey)}
+              onBlur={() => setActiveKey(null)}
               onClick={() =>
-                !isPrint && setActiveKey((prev) => (prev === row.channelKey ? null : row.channelKey))
+                setActiveKey((prev) => (prev === row.channelKey ? null : row.channelKey))
               }
-              className={`grid grid-cols-12 items-center ${isPrint ? 'gap-1 px-1.5 py-1' : 'gap-2 px-2 py-1.5'} rounded-lg transition-colors ${
+              className={`grid grid-cols-12 items-center gap-2 px-2 py-1.5 rounded-lg transition-colors ${
                 row.isTopChannel
                   ? 'bg-[#EAF2FA]/75 border border-[#C6A35E]/55'
                   : isHovered
@@ -227,9 +317,9 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               } focus:outline-none focus:ring-2 focus:ring-[#1769AA]/40 cursor-pointer`}
             >
               {/* 1. Channel Name & Rank (Right side in RTL) */}
-              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center gap-1 min-w-0`}>
+              <div className="col-span-4 sm:col-span-3 flex items-center gap-1 min-w-0">
                 <span
-                  className={`${isPrint ? 'w-4 h-4 text-[9px]' : 'w-5 h-5 text-[10px]'} rounded-md font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
+                  className={`w-5 h-5 text-[10px] rounded-md font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
                     row.isTopChannel
                       ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]'
                       : 'bg-[#EAF2FA] text-[#0C2544]'
@@ -239,14 +329,12 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
                   {formatNumber(row.rank)}
                 </span>
                 <span
-                  className={`${
-                    isPrint ? 'text-[9.5px]' : 'text-xs'
-                  } font-extrabold text-[#0C2544] truncate`}
+                  className="text-xs font-extrabold text-[#0C2544] break-words leading-tight"
                   title={row.nameAr}
                 >
                   {row.nameAr}
                 </span>
-                {row.isTopChannel && !isPrint && (
+                {row.isTopChannel && (
                   <Award
                     className="w-3.5 h-3.5 text-[#C6A35E] shrink-0 hidden sm:inline-block"
                     aria-label="القناة الأعلى طلباً"
@@ -255,12 +343,8 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               </div>
 
               {/* 2. Horizontal Bar Track (Middle) */}
-              <div className={`${isPrint ? 'col-span-5' : 'col-span-4 sm:col-span-6'} flex items-center`}>
-                <div
-                  className={`w-full ${
-                    isPrint ? 'h-3' : 'h-5'
-                  } rounded-md bg-[#EAF2FA] border border-[#D5E4F4] overflow-hidden p-0.5 flex items-center`}
-                >
+              <div className="col-span-4 sm:col-span-6 flex items-center">
+                <div className="w-full h-5 rounded-md bg-[#EAF2FA] border border-[#D5E4F4] overflow-hidden p-0.5 flex items-center">
                   {row.requestCount > 0 ? (
                     <div
                       className="h-full rounded-xs transition-all duration-300 relative"
@@ -280,23 +364,21 @@ export const LogisticsHorizontalChart: React.FC<LogisticsHorizontalChartProps> =
               </div>
 
               {/* 3. Numeric Value & Share Percentage (Left side in RTL) */}
-              <div className={`${isPrint ? 'col-span-4' : 'col-span-4 sm:col-span-3'} flex items-center justify-end gap-1 shrink-0`}>
+              <div className="col-span-4 sm:col-span-3 flex items-center justify-end gap-1 shrink-0">
                 <span
-                  className={`${
-                    isPrint ? 'text-[9.5px]' : 'text-xs'
-                  } font-extrabold text-[#0C2544] tabular-nums whitespace-nowrap`}
+                  className="text-xs font-extrabold text-[#0C2544] tabular-nums whitespace-nowrap"
                   dir="ltr"
                 >
                   {formatNumber(row.requestCount)}
                 </span>
-                <span className={`${isPrint ? 'text-[9px] inline' : 'text-[10px] hidden sm:inline'} font-semibold text-slate-500 whitespace-nowrap`}>
+                <span className="text-[10px] hidden sm:inline font-semibold text-slate-500 whitespace-nowrap">
                   طلباً
                 </span>
                 <span className="text-slate-300 text-[9px]" aria-hidden="true">
                   —
                 </span>
                 <span
-                  className={`${isPrint ? 'min-w-[40px] px-1 text-[9.5px]' : 'min-w-[46px] px-1.5 text-[10.5px]'} text-center py-0.5 rounded font-extrabold tabular-nums whitespace-nowrap ${
+                  className={`min-w-[46px] px-1.5 text-[10.5px] text-center py-0.5 rounded font-extrabold tabular-nums whitespace-nowrap ${
                     row.isTopChannel
                       ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]/60'
                       : row.requestCount > 0

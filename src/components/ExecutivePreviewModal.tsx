@@ -48,7 +48,7 @@ export const ExecutivePreviewModal: React.FC<{
   exportingExcel = false,
   snapshotVersion,
 }) => {
-  const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
+  const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
   const [zoom, setZoom] = useState<75 | 100 | 125>(100);
   const [activePage, setActivePage] = useState<number | 'all'>('all');
   const [totalPages, setTotalPages] = useState<number>(OFFICIAL_REPORT_TOTAL_PAGES);

@@ -148,6 +148,129 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
     return 'linear-gradient(270deg, #1E5A8A 0%, #247DC1 100%)';
   };
 
+  if (isPrint) {
+    return (
+      <div
+        dir="rtl"
+        className={`relative rounded-lg border border-[#B8CDE4] bg-gradient-to-b from-white to-[#F6FAFE] px-2.5 py-1.5 select-none ${className}`}
+        style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}
+      >
+        {/* Compact Print Header Strip — single clean row without duplicating top Section 6 KPI boxes */}
+        <div className="flex items-center justify-between gap-2 border-b border-[#DCE8F5] pb-1 mb-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="w-1.5 h-4 rounded-full bg-gradient-to-b from-[#0C2544] via-[#1769AA] to-[#C6A35E] shrink-0" />
+            <h4 className="text-[10px] font-extrabold text-[#012E5E] leading-tight">
+              مقارنة الأعطال بين المقرات{' '}
+              <span className="text-[8.5px] font-bold text-slate-500">
+                (مرتبة تنازلياً حسب عدد الأعطال المسجلة ونسبة المساهمة)
+              </span>
+            </h4>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0 text-[8.5px]">
+            <span className="px-2 py-0.5 rounded bg-[#EAF2FA] border border-[#C5D8EE] font-extrabold text-[#012E5E] whitespace-nowrap">
+              إجمالي الأعطال:{' '}
+              <strong className="tabular-nums text-[#0C4176]" dir="ltr">
+                {formatNumber(totalFaults)}
+              </strong>{' '}
+              عطلاً
+            </span>
+            {topSite && (
+              <span className="px-2 py-0.5 rounded bg-[#0C2544] text-white border border-[#C6A35E]/70 font-extrabold whitespace-nowrap">
+                الأعلى: <strong className="text-[#DFC076]">{topSite.nameAr}</strong> (
+                <span className="tabular-nums text-[#DFC076]" dir="ltr">
+                  {formatNumber(topSite.faults)}
+                </span>{' '}
+                —{' '}
+                <span className="tabular-nums text-[#DFC076]" dir="ltr">
+                  {formatPercentage(topSite.sharePct)}
+                </span>
+                )
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* 5 Compact Facility Rows — deterministic 4-column RTL layout */}
+        <div className="space-y-1">
+          {sortedRows.map((row) => (
+            <div
+              key={row.siteId}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '168px 1fr 68px 48px',
+                alignItems: 'center',
+                columnGap: '8px',
+              }}
+              className={`px-2 py-[2.5px] rounded-md ${
+                row.isTopSite
+                  ? 'bg-[#EAF2FA]/85 border border-[#C6A35E]/65'
+                  : 'bg-white border border-[#E4EDF7]'
+              }`}
+            >
+              {/* Col 1 (Rightmost in RTL): Rank Badge + Full Facility Name */}
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span
+                  className={`w-4 h-4 rounded text-[8.5px] font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
+                    row.isTopSite
+                      ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]'
+                      : 'bg-[#EAF2FA] text-[#012E5E]'
+                  }`}
+                  dir="ltr"
+                >
+                  {formatNumber(row.rank)}
+                </span>
+                <span className="text-[9.2px] font-extrabold text-[#012E5E] leading-tight break-words">
+                  {row.nameAr}
+                </span>
+              </div>
+
+              {/* Col 2 (Middle): Proportional Horizontal Bar */}
+              <div className="w-full h-3 rounded bg-[#EAF2FA] border border-[#D0E1F3] overflow-hidden p-[1px] flex items-center">
+                {row.faults > 0 ? (
+                  <div
+                    className="h-full rounded-xs"
+                    style={{
+                      width: `${row.widthPct}%`,
+                      background: getBarBackground(row),
+                    }}
+                  />
+                ) : (
+                  <div className="h-full w-1 rounded-xs bg-slate-300" />
+                )}
+              </div>
+
+              {/* Col 3: Fault Count */}
+              <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                <span
+                  className="text-[9.5px] font-black text-[#012E5E] tabular-nums"
+                  dir="ltr"
+                >
+                  {formatNumber(row.faults)}
+                </span>
+                <span className="text-[8.5px] font-bold text-slate-600">عطلاً</span>
+              </div>
+
+              {/* Col 4 (Leftmost in RTL): Share Percentage Badge */}
+              <span
+                className={`w-full text-center py-[1px] px-1 rounded text-[9px] font-extrabold tabular-nums whitespace-nowrap ${
+                  row.isTopSite
+                    ? 'bg-[#0C2544] text-[#DFC076] border border-[#C6A35E]/60'
+                    : row.faults > 0
+                      ? 'bg-[#EAF2FA] text-[#1769AA]'
+                      : 'bg-slate-100 text-slate-500'
+                }`}
+                dir="ltr"
+              >
+                {formatPercentage(row.sharePct)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       dir="rtl"
