@@ -9,6 +9,7 @@ import type { AppTab } from './components/ExecutiveHeroHeader.tsx';
 import { ExecutivePreviewModal } from './components/ExecutivePreviewModal.tsx';
 import { ExecutiveSidebar } from './components/ExecutiveSidebar.tsx';
 import { MonthlyReportTab } from './components/MonthlyReportTab.tsx';
+import { OfficialReportLayout } from './components/OfficialReportLayout.tsx';
 import {
   AdminSettingsModal,
   AuditHistoryModal,
@@ -19,7 +20,11 @@ import {
 } from './components/ToastAndModals.tsx';
 import { useNotification } from './notifications/NotificationProvider.tsx';
 import type { NotificationNavigationTarget } from './notifications/types.ts';
-import { exportReportExcel, exportReportPdf } from './services/ReportExportService.ts';
+import {
+  exportReportExcel,
+  exportReportPdf,
+  prepareAndTriggerPrint,
+} from './services/ReportExportService.ts';
 import type {
   ApprovalRecord,
   AuditLogEntry,
@@ -89,6 +94,14 @@ export default function App() {
     thresholds: PerformanceThresholds;
     versionNumber: number | null;
   } | null>(null);
+  const [printHostTarget, setPrintHostTarget] = useState<{
+    report: MonthlyReportFull;
+    sites: MaintenanceSite[];
+    categories: MaintenanceCategory[];
+    thresholds: PerformanceThresholds;
+    orientation: 'landscape' | 'portrait';
+    snapshotVersion?: number | null;
+  } | null>(null);
 
   const [workflowAction, setWorkflowAction] = useState<
     | 'submit_review'
@@ -103,6 +116,7 @@ export default function App() {
 
   const sessionWarnShownRef = useRef(false);
   const highlightTimeoutRef = useRef<number | null>(null);
+  const printHostRef = useRef<HTMLDivElement>(null);
 
   const scrollToSection = useCallback((sectionId: string) => {
     setTimeout(() => {
@@ -758,14 +772,97 @@ export default function App() {
       }
     );
     try {
-      const { filename } = await exportReportPdf({
+      const { filename, mode } = await exportReportPdf({
         reportId,
         versionNumber,
         orientation,
+        onPrintFallback: async (printOrientation) => {
+          const modalTargetId = snapshotPreview ? snapshotPreview.report.id : activeReport?.id;
+          const modalTargetVersion = snapshotPreview?.versionNumber ?? undefined;
+          const isModalMatchingTarget =
+            previewOpen && modalTargetId === reportId && modalTargetVersion === versionNumber;
+
+          if (isModalMatchingTarget) {
+            document.body.classList.add('saaed-printing-modal');
+            await prepareAndTriggerPrint({ orientation: printOrientation });
+            return;
+          }
+
+          let targetData: {
+            report: MonthlyReportFull;
+            sites: MaintenanceSite[];
+            categories: MaintenanceCategory[];
+            thresholds: PerformanceThresholds;
+            snapshotVersion?: number | null;
+          };
+
+          if (versionNumber != null) {
+            try {
+              const res = await api.getReportVersionSnapshot(reportId, versionNumber);
+              targetData = {
+                report: res.snapshot.report,
+                sites: res.snapshot.sites,
+                categories: res.snapshot.categories,
+                thresholds: res.snapshot.thresholds,
+                snapshotVersion: versionNumber,
+              };
+            } catch {
+              const rep = await api.getReport(reportId);
+              targetData = {
+                report: rep.report,
+                sites,
+                categories,
+                thresholds,
+                snapshotVersion: versionNumber,
+              };
+            }
+          } else if (activeReport && activeReport.id === reportId) {
+            targetData = {
+              report: activeReport,
+              sites,
+              categories,
+              thresholds,
+              snapshotVersion: null,
+            };
+          } else {
+            const rep = await api.getReport(reportId);
+            targetData = {
+              report: rep.report,
+              sites,
+              categories,
+              thresholds,
+              snapshotVersion: null,
+            };
+          }
+
+          setPrintHostTarget({
+            ...targetData,
+            orientation: printOrientation,
+          });
+          document.body.classList.add('saaed-printing-modal');
+          try {
+            await new Promise<void>((resolve) => {
+              window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => resolve());
+              });
+            });
+            await prepareAndTriggerPrint({
+              orientation: printOrientation,
+              container: printHostRef.current,
+            });
+          } finally {
+            setPrintHostTarget(null);
+            if (!previewOpen) {
+              document.body.classList.remove('saaed-printing-modal');
+            }
+          }
+        },
       });
       notifySuccess(
-        'تم إنشاء ملف PDF بنجاح.',
-        `تم تنزيل المستند التنفيذي ${filename} شاملاً جميع البطاقات والصور والجداول والرسوم البيانية.`,
+        mode === 'print' ? 'تم تجهيز التقرير الرسمي للطباعة أو الحفظ كـ PDF.' : 'تم إنشاء ملف PDF بنجاح.',
+        mode === 'print'
+          ? 'تمت تهيئة صفحات A4 الرسمية كاملة للمعاينة والطباعة والحفظ بصيغة PDF.'
+          : `تم تنزيل المستند التنفيذي ${filename} شاملاً جميع البطاقات والصور والجداول والرسوم البيانية.`,
         {
           dedupeKey: `pdf_ok_${key}_${orientation}`,
           context: 'print',
@@ -1213,6 +1310,19 @@ export default function App() {
             `${snapshotPreview ? snapshotPreview.report.id : activeReport!.id}_${snapshotPreview?.versionNumber ?? 'live'}`
           }
         />
+      )}
+
+      {printHostTarget && (
+        <div ref={printHostRef} dir="rtl" className="saaed-print-only-host">
+          <OfficialReportLayout
+            report={printHostTarget.report}
+            sites={printHostTarget.sites}
+            categories={printHostTarget.categories}
+            thresholds={printHostTarget.thresholds}
+            orientation={printHostTarget.orientation}
+            snapshotVersion={printHostTarget.snapshotVersion}
+          />
+        </div>
       )}
     </div>
   );

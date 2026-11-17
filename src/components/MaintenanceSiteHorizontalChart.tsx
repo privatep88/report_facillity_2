@@ -315,7 +315,7 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
               } focus:outline-none focus:ring-2 focus:ring-[#1769AA]/40 cursor-pointer`}
             >
               {/* 1. Facility Name & Rank (Right side in RTL) */}
-              <div className="col-span-4 sm:col-span-3 flex items-center gap-2 min-w-0">
+              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center gap-2 min-w-0`}>
                 <span
                   className={`w-5 h-5 rounded-md text-[10px] font-extrabold flex items-center justify-center shrink-0 tabular-nums ${
                     row.isTopSite
@@ -342,7 +342,7 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
               </div>
 
               {/* 2. Horizontal Bar Track (Middle) */}
-              <div className="col-span-4 sm:col-span-6 flex items-center">
+              <div className={`${isPrint ? 'col-span-6' : 'col-span-4 sm:col-span-6'} flex items-center`}>
                 <div
                   className={`w-full ${
                     isPrint ? 'h-3.5' : 'h-5'
@@ -364,7 +364,7 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
               </div>
 
               {/* 3. Fault Count & Share Percentage (Left side in RTL) */}
-              <div className="col-span-4 sm:col-span-3 flex items-center justify-end gap-1.5 shrink-0">
+              <div className={`${isPrint ? 'col-span-3' : 'col-span-4 sm:col-span-3'} flex items-center justify-end gap-1.5 shrink-0`}>
                 <span
                   className={`${
                     isPrint ? 'text-[11px]' : 'text-xs'
@@ -373,7 +373,7 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
                 >
                   {formatNumber(row.faults)}
                 </span>
-                <span className="text-[10px] font-semibold text-slate-500 hidden sm:inline">
+                <span className={`text-[10px] font-semibold text-slate-500 ${isPrint ? 'inline' : 'hidden sm:inline'}`}>
                   عطلاً
                 </span>
                 <span className="text-slate-300 text-[10px]" aria-hidden="true">

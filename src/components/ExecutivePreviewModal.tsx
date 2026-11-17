@@ -51,9 +51,16 @@ export const ExecutivePreviewModal: React.FC<{
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
   const [zoom, setZoom] = useState<75 | 100 | 125>(100);
   const [activePage, setActivePage] = useState<number | 'all'>('all');
+  const [totalPages, setTotalPages] = useState<number>(OFFICIAL_REPORT_TOTAL_PAGES);
   const [preparingPrint, setPreparingPrint] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const { notifyInfo } = useNotification();
+
+  useEffect(() => {
+    if (activePage !== 'all' && activePage > totalPages) {
+      setActivePage(totalPages > 0 ? totalPages : 'all');
+    }
+  }, [activePage, totalPages]);
 
   useEffect(() => {
     if (!open) return;
@@ -127,8 +134,8 @@ export const ExecutivePreviewModal: React.FC<{
           ) : (
             <span className="text-xs text-sky-200">
               {orientation === 'landscape'
-                ? 'تنسيق A4 أفقي (297×210 مم) · 5 صفحات رسمية'
-                : 'تنسيق A4 عمودي (210×297 مم) · 5 صفحات رسمية'}
+                ? `تنسيق A4 أفقي (297×210 مم) · ${formatNumber(totalPages)} صفحة رسمية`
+                : `تنسيق A4 عمودي (210×297 مم) · ${formatNumber(totalPages)} صفحة رسمية`}
             </span>
           )}
         </div>
@@ -145,7 +152,7 @@ export const ExecutivePreviewModal: React.FC<{
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>كل الصفحات ({formatNumber(OFFICIAL_REPORT_TOTAL_PAGES)})</span>
+            <span>كل الصفحات ({formatNumber(totalPages)})</span>
           </button>
 
           <button
@@ -160,7 +167,7 @@ export const ExecutivePreviewModal: React.FC<{
             <ChevronRight className="w-4 h-4" />
           </button>
 
-          {[1, 2, 3, 4, 5].map((p) => (
+          {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((p) => (
             <button
               key={p}
               type="button"
@@ -180,7 +187,7 @@ export const ExecutivePreviewModal: React.FC<{
             type="button"
             onClick={() => {
               const cur = activePage === 'all' ? 1 : activePage;
-              jumpToPage(Math.min(OFFICIAL_REPORT_TOTAL_PAGES, cur + 1));
+              jumpToPage(Math.min(totalPages, cur + 1));
             }}
             title="الصفحة التالية"
             className="p-1 rounded hover:bg-white/10 text-slate-200 cursor-pointer"
@@ -194,7 +201,10 @@ export const ExecutivePreviewModal: React.FC<{
           <div className="flex items-center bg-white/10 rounded-lg p-0.5 text-xs">
             <button
               type="button"
-              onClick={() => setOrientation('landscape')}
+              onClick={() => {
+                setActivePage('all');
+                setOrientation('landscape');
+              }}
               className={`px-3 py-1 rounded-md font-semibold cursor-pointer whitespace-nowrap ${
                 orientation === 'landscape' ? 'bg-[#C8A85D] text-[#0B2341]' : 'text-slate-200'
               }`}
@@ -203,7 +213,10 @@ export const ExecutivePreviewModal: React.FC<{
             </button>
             <button
               type="button"
-              onClick={() => setOrientation('portrait')}
+              onClick={() => {
+                setActivePage('all');
+                setOrientation('portrait');
+              }}
               className={`px-3 py-1 rounded-md font-semibold cursor-pointer whitespace-nowrap ${
                 orientation === 'portrait' ? 'bg-[#C8A85D] text-[#0B2341]' : 'text-slate-200'
               }`}
@@ -234,7 +247,13 @@ export const ExecutivePreviewModal: React.FC<{
           {onExportPdf && (
             <button
               type="button"
-              onClick={() => onExportPdf(orientation)}
+              onClick={async () => {
+                if (activePage !== 'all') {
+                  setActivePage('all');
+                  await new Promise((r) => window.setTimeout(r, 80));
+                }
+                await onExportPdf(orientation);
+              }}
               disabled={exportingPdf}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#C99E4A] hover:bg-[#b58a37] disabled:opacity-60 text-[#0B2341] text-xs font-extrabold cursor-pointer whitespace-nowrap"
             >
@@ -307,6 +326,7 @@ export const ExecutivePreviewModal: React.FC<{
           orientation={orientation}
           snapshotVersion={snapshotVersion}
           activePageFilter={activePage}
+          onPaginationChange={setTotalPages}
         />
       </div>
     </div>

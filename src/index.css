@@ -632,10 +632,21 @@
   }
 }
 
+/* Off-screen print host mounted only during direct PDF export when preview modal is closed */
+.saaed-print-only-host {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 1280px;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+
 /* Print Styles for Official Executive Report Preview & Isolated A4 Printing */
 @media print {
   @page {
-    margin: 10mm 8mm 12mm 8mm;
+    margin: 4mm;
   }
 
   html,
@@ -644,14 +655,29 @@
     color: #012E5E !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
-    font-size: 11px !important;
     height: auto !important;
     overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
-  /* When printing from ExecutivePreviewModal or AnalyticsPrintModal, hide the background shell completely */
+  /* When printing from ExecutivePreviewModal, AnalyticsPrintModal, or direct PDF host, hide app shell */
   body.saaed-printing-modal .saaed-app-shell {
     display: none !important;
+  }
+
+  .saaed-print-only-host {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: auto !important;
+    height: auto !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    z-index: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   .no-print {
@@ -677,12 +703,13 @@
 
   .saaed-preview-zoom-stage {
     transform: none !important;
-    width: 100% !important;
+    width: auto !important;
     padding: 0 !important;
     margin: 0 !important;
   }
 
-  .saaed-preview-sheet {
+  /* Preserve fluid full-width behavior for AnalyticsPrintModal sheets */
+  .saaed-preview-sheet:not(.official-report-page) {
     box-shadow: none !important;
     border: 0 !important;
     margin: 0 !important;
@@ -691,16 +718,47 @@
     border-radius: 0 !important;
   }
 
+  /* Strict 1:1 WYSIWYG A4 sheets for OfficialReportLayout */
   .official-report-pages-container {
     display: block !important;
+    width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .official-report-pages-container > * + * {
+    margin-top: 0 !important;
   }
 
   .official-report-page {
-    break-after: page !important;
-    page-break-after: always !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    box-sizing: border-box !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
     break-inside: avoid-page !important;
     page-break-inside: avoid !important;
-    margin-bottom: 0 !important;
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+
+  .official-report-page--landscape {
+    width: 1220px !important;
+    max-width: 1220px !important;
+    min-height: 854px !important;
+    height: 854px !important;
+    zoom: 0.888;
+  }
+
+  .official-report-page--portrait {
+    width: 920px !important;
+    max-width: 920px !important;
+    min-height: 1310px !important;
+    height: 1310px !important;
+    zoom: 0.825;
   }
 
   .official-report-page:last-child {
@@ -727,8 +785,8 @@
     break-inside: avoid !important;
     page-break-inside: avoid !important;
     width: 100% !important;
-    min-height: 70px !important;
-    max-height: 82px !important;
+    min-height: 68px !important;
+    max-height: 78px !important;
     padding: 6px 16px 8px 0 !important;
   }
 

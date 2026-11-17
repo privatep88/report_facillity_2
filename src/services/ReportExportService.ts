@@ -53,6 +53,7 @@ function parseFilename(disposition: string | null, fallback: string): string {
 export interface ExportResult {
   filename: string;
   sizeBytes: number;
+  mode?: 'download' | 'print';
 }
 
 /**
@@ -197,12 +198,25 @@ export async function exportReportPdf(params: {
   reportId: string;
   versionNumber?: number | null;
   orientation?: 'landscape' | 'portrait';
+  onPrintFallback?: (orientation: 'landscape' | 'portrait') => Promise<void>;
 }): Promise<ExportResult> {
-  const { reportId, versionNumber, orientation = 'landscape' } = params;
+  const { reportId, versionNumber, orientation = 'landscape', onPrintFallback } = params;
+
+  const runFallbackPrint = async (): Promise<ExportResult> => {
+    if (onPrintFallback) {
+      await onPrintFallback(orientation);
+    } else {
+      await prepareAndTriggerPrint({ orientation });
+    }
+    return {
+      filename: `SAAED_FM_Report_${reportId}.pdf`,
+      sizeBytes: 1024,
+      mode: 'print',
+    };
+  };
 
   if (isStaticBackendUnavailable()) {
-    await prepareAndTriggerPrint({ orientation });
-    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+    return runFallbackPrint();
   }
 
   const qs = new URLSearchParams();
@@ -222,15 +236,13 @@ export async function exportReportPdf(params: {
     });
   } catch {
     markStaticBackendUnavailable();
-    await prepareAndTriggerPrint({ orientation });
-    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+    return runFallbackPrint();
   }
 
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   if (res.status === 404 || contentType.includes('text/html')) {
     markStaticBackendUnavailable();
-    await prepareAndTriggerPrint({ orientation });
-    return { filename: `SAAED_FM_Report_${reportId}.pdf`, sizeBytes: 1024 };
+    return runFallbackPrint();
   }
 
   if (!res.ok) {
@@ -251,7 +263,7 @@ export async function exportReportPdf(params: {
     `SAAED_FM_Report_${reportId}.pdf`
   );
   triggerBrowserDownload(blob, filename);
-  return { filename, sizeBytes: blob.size };
+  return { filename, sizeBytes: blob.size, mode: 'download' };
 }
 
 export async function exportReportExcel(params: {
@@ -409,9 +421,20 @@ export async function exportAnalyticsExcel(params: {
   return { filename, sizeBytes: blob.size };
 }
 
+async function waitForPaginationReady(root: ParentNode, timeoutMs = 1600): Promise<void> {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt < timeoutMs) {
+    const paginated = root.querySelector('.official-report-pages-container');
+    if (!paginated || paginated.getAttribute('data-pagination-ready') === 'true') {
+      return;
+    }
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+}
+
 /**
- * Waits for web fonts (Cairo / IBM Plex) and all rendered images/signatures to finish decoding
- * before triggering browser print with exact A4 orientation styling.
+ * Waits for web fonts (Cairo / IBM Plex), A4 pagination refinement, and all rendered
+ * images/signatures to finish decoding before triggering browser print with exact A4 styling.
  */
 export async function prepareAndTriggerPrint(params: {
   orientation?: 'landscape' | 'portrait';
@@ -430,7 +453,10 @@ export async function prepareAndTriggerPrint(params: {
     // ignore font readiness failures
   }
 
-  const root = container || document;
+  const root: ParentNode = container || document;
+
+  await waitForPaginationReady(root);
+
   const imgs = Array.from(root.querySelectorAll('img'));
   await Promise.race([
     Promise.all(
@@ -458,21 +484,35 @@ export async function prepareAndTriggerPrint(params: {
     new Promise((r) => window.setTimeout(r, 1800)),
   ]);
 
+  // Wait two animation frames so SVG charts and fonts commit cleanly after pagination
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+
   const styleId = 'saaed-dynamic-print-page-style';
   document.getElementById(styleId)?.remove();
   const styleEl = document.createElement('style');
   styleEl.id = styleId;
-  styleEl.textContent = `@media print { @page { size: A4 ${orientation}; margin: 8mm 8mm 10mm 8mm; } }`;
+  styleEl.textContent = `@media print { @page { size: A4 ${orientation}; margin: 4mm; } }`;
   document.head.appendChild(styleEl);
 
-  const cleanup = () => {
-    styleEl.remove();
-    window.removeEventListener('afterprint', cleanup);
-  };
-  window.addEventListener('afterprint', cleanup);
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    let fallbackTimer = 0;
 
-  window.requestAnimationFrame(() => {
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener('afterprint', cleanup);
+      styleEl.remove();
+      resolve();
+    };
+
+    window.addEventListener('afterprint', cleanup);
+    fallbackTimer = window.setTimeout(cleanup, 1200);
     window.print();
-    window.setTimeout(cleanup, 1200);
   });
 }
