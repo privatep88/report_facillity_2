@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import headerBackdrop from '../assets/images/saaed_header_visual_bg.png';
+import headerBackdropPng from '../assets/images/saaed_header_visual_bg.png';
+import headerBackdropWebp from '../assets/images/saaed_header_visual_bg.webp';
 import saaedLogoMark from '../assets/images/saaed_logo_mark.png';
 
 interface SaaedExecutiveHeaderProps {
@@ -12,19 +13,23 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
 
   return (
     <header className={`saaed-executive-header ${className}`.trim()} dir="ltr">
-      {/* Layer 1: High-Resolution Text-Free Visual Backdrop (Building, UAE Flag, Skyline & Navy Gradient) */}
+      {/* Layer 1: High-Resolution 4K Visual Backdrop (Building, UAE Flag, Restored Skyline & Navy Gradient) */}
       <div className="header-visual" aria-hidden="true">
         {!backdropFailed ? (
-          <img
-            src={headerBackdrop}
-            alt="المقر الرئيسي لشركة ساعد للأنظمة المرورية — إدارة المرافق"
-            className="header-backdrop-img"
-            width={2398}
-            height={266}
-            draggable={false}
-            referrerPolicy="no-referrer"
-            onError={() => setBackdropFailed(true)}
-          />
+          <picture>
+            <source srcSet={headerBackdropWebp} type="image/webp" />
+            <img
+              src={headerBackdropPng}
+              alt="المقر الرئيسي لشركة ساعد للأنظمة المرورية — إدارة المرافق"
+              className="header-backdrop-img"
+              width={4796}
+              height={532}
+              decoding="sync"
+              draggable={false}
+              referrerPolicy="no-referrer"
+              onError={() => setBackdropFailed(true)}
+            />
+          </picture>
         ) : (
           <div className="header-backdrop-fallback" />
         )}

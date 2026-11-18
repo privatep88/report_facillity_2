@@ -98,6 +98,12 @@
   z-index: 1;
 }
 
+.saaed-executive-header .header-visual picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .saaed-executive-header .header-backdrop-img {
   display: block;
   width: 100%;
