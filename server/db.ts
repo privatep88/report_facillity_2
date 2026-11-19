@@ -517,7 +517,7 @@ export function initSchemaAndSeed(): void {
     );
   }
 
-  // Seed original 5 Maintenance Sites
+  // Seed Maintenance Sites (6 standard sites including Impound Yards right after Ajman Patrols)
   const sitesCount = db.prepare('SELECT COUNT(*) as cnt FROM maintenance_sites').get() as { cnt: number };
   if (sitesCount.cnt === 0) {
     const insertSite = db.prepare(
@@ -528,6 +528,59 @@ export function initSchemaAndSeed(): void {
     insertSite.run('site_ibn_battuta', 'IBN_BATTUTA', 'مقر ابن بطوطة', 'Ibn Battuta HQ', 3, now);
     insertSite.run('site_ajman_eval', 'AJMAN_EVAL', 'مقر تقييم عجمان', 'Ajman Evaluation HQ', 4, now);
     insertSite.run('site_ajman_patrols', 'AJMAN_PATROLS', 'مقر دوريات عجمان', 'Ajman Patrols HQ', 5, now);
+    insertSite.run('site_impound_yards', 'IMPOUND_YARDS', 'مقرات ساحات الحجز', 'Impound Yards HQ', 6, now);
+  } else {
+    // Idempotent migration for existing databases: insert 'مقرات ساحات الحجز' immediately after 'مقر دوريات عجمان'
+    const existingImpound = db
+      .prepare(
+        `SELECT id FROM maintenance_sites
+         WHERE id = 'site_impound_yards' OR code = 'IMPOUND_YARDS' OR TRIM(name_ar) = 'مقرات ساحات الحجز'`
+      )
+      .get() as { id: string } | undefined;
+
+    if (!existingImpound) {
+      const ajmanRow = db
+        .prepare(
+          `SELECT sort_order FROM maintenance_sites
+           WHERE id = 'site_ajman_patrols' OR TRIM(name_ar) = 'مقر دوريات عجمان'
+           ORDER BY sort_order ASC LIMIT 1`
+        )
+        .get() as { sort_order: number } | undefined;
+
+      const maxRow = db
+        .prepare('SELECT COALESCE(MAX(sort_order), 0) as max_order FROM maintenance_sites')
+        .get() as { max_order: number };
+
+      const targetOrder = ajmanRow ? Number(ajmanRow.sort_order) + 1 : Number(maxRow.max_order) + 1;
+
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        if (ajmanRow) {
+          db.prepare('UPDATE maintenance_sites SET sort_order = sort_order + 1 WHERE sort_order >= ?').run(
+            targetOrder
+          );
+        }
+        db.prepare(
+          'INSERT INTO maintenance_sites (id, code, name_ar, name_en, is_active, sort_order, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)'
+        ).run('site_impound_yards', 'IMPOUND_YARDS', 'مقرات ساحات الحجز', 'Impound Yards HQ', targetOrder, now);
+
+        // Initialize 0-fault matrix cells for existing reports without altering any saved values
+        const existingReports = db.prepare('SELECT id FROM monthly_reports').all() as Array<{ id: string }>;
+        const existingCats = db.prepare('SELECT id FROM maintenance_categories').all() as Array<{ id: string }>;
+        const insertRecord = db.prepare(
+          'INSERT OR IGNORE INTO maintenance_records (id, report_id, site_id, category_id, fault_count) VALUES (?, ?, ?, ?, 0)'
+        );
+        for (const rep of existingReports) {
+          for (const cat of existingCats) {
+            insertRecord.run(`mr_${rep.id}_site_impound_yards_${cat.id}`, rep.id, 'site_impound_yards', cat.id);
+          }
+        }
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    }
   }
 
   // Seed original 12 Maintenance Categories

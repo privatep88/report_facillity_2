@@ -106,6 +106,7 @@ const INITIAL_SITES: MaintenanceSite[] = [
   { id: 'site_ibn_battuta', code: 'IBN_BATTUTA', nameAr: 'مقر ابن بطوطة', nameEn: 'Ibn Battuta HQ', isActive: true, sortOrder: 3 },
   { id: 'site_ajman_eval', code: 'AJMAN_EVAL', nameAr: 'مقر تقييم عجمان', nameEn: 'Ajman Evaluation HQ', isActive: true, sortOrder: 4 },
   { id: 'site_ajman_patrols', code: 'AJMAN_PATROLS', nameAr: 'مقر دوريات عجمان', nameEn: 'Ajman Patrols HQ', isActive: true, sortOrder: 5 },
+  { id: 'site_impound_yards', code: 'IMPOUND_YARDS', nameAr: 'مقرات ساحات الحجز', nameEn: 'Impound Yards HQ', isActive: true, sortOrder: 6 },
 ];
 
 const INITIAL_CATEGORIES: MaintenanceCategory[] = [
@@ -407,13 +408,56 @@ function createInitialStoreState(): StaticStoreState {
 
 let memoryStore: StaticStoreState | null = null;
 
+function ensureImpoundYardsSiteInStore(state: StaticStoreState): boolean {
+  if (!Array.isArray(state.sites)) return false;
+  const exists = state.sites.some(
+    (s) =>
+      s.id === 'site_impound_yards' ||
+      s.code === 'IMPOUND_YARDS' ||
+      (s.nameAr || '').trim() === 'مقرات ساحات الحجز'
+  );
+  if (exists) return false;
+
+  const sortedSites = [...state.sites].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const ajmanIdx = sortedSites.findIndex(
+    (s) => s.id === 'site_ajman_patrols' || (s.nameAr || '').trim() === 'مقر دوريات عجمان'
+  );
+  const insertAt = ajmanIdx >= 0 ? ajmanIdx + 1 : sortedSites.length;
+
+  const newSite: MaintenanceSite = {
+    id: 'site_impound_yards',
+    code: 'IMPOUND_YARDS',
+    nameAr: 'مقرات ساحات الحجز',
+    nameEn: 'Impound Yards HQ',
+    isActive: true,
+    sortOrder: insertAt + 1,
+  };
+
+  sortedSites.splice(insertAt, 0, newSite);
+  state.sites = sortedSites.map((s, idx) => ({ ...s, sortOrder: idx + 1 }));
+
+  const cats = Array.isArray(state.categories) ? state.categories : INITIAL_CATEGORIES;
+  for (const report of Object.values(state.reports || {})) {
+    if (!report.maintenanceMatrix) report.maintenanceMatrix = {};
+    if (!report.maintenanceMatrix[newSite.id]) {
+      report.maintenanceMatrix[newSite.id] = {};
+      for (const c of cats) {
+        report.maintenanceMatrix[newSite.id][c.id] = 0;
+      }
+    }
+  }
+  return true;
+}
+
 function loadStore(): StaticStoreState {
   try {
     const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STATIC_STORE_KEY) : null;
     if (raw) {
       const parsed = JSON.parse(raw) as StaticStoreState;
       if (parsed && parsed.reports && Object.keys(parsed.reports).length > 0) {
+        const migrated = ensureImpoundYardsSiteInStore(parsed);
         memoryStore = parsed;
+        if (migrated) saveStore(parsed);
         return parsed;
       }
     }
@@ -421,6 +465,7 @@ function loadStore(): StaticStoreState {
     // ignore storage errors
   }
   if (memoryStore && memoryStore.reports && Object.keys(memoryStore.reports).length > 0) {
+    ensureImpoundYardsSiteInStore(memoryStore);
     return memoryStore;
   }
   const initial = createInitialStoreState();

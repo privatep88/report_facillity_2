@@ -208,7 +208,10 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
   const [editSecurityDraft, setEditSecurityDraft] = useState({ nameAr: '', nameEn: '' });
 
   const visibleSites = useMemo(
-    () => (showInactiveSites ? sites : sites.filter((s) => s.isActive)),
+    () =>
+      (showInactiveSites ? sites : sites.filter((s) => s.isActive))
+        .slice()
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
     [sites, showInactiveSites]
   );
 

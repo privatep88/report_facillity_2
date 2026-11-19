@@ -191,7 +191,7 @@ export const MaintenanceSiteHorizontalChart: React.FC<MaintenanceSiteHorizontalC
           </div>
         </div>
 
-        {/* 5 Compact Facility Rows — deterministic 4-column RTL layout */}
+        {/* Compact Facility Rows — deterministic 4-column RTL layout */}
         <div className="space-y-1">
           {sortedRows.map((row) => (
             <div
