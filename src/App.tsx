@@ -38,12 +38,46 @@ import type {
   ReportVersionSummary,
 } from './types/report.ts';
 import { DEFAULT_THRESHOLDS, REPORT_STATUSES, USER_ROLES } from './types/report.ts';
-import { formatDateTimeWestern, getMonthNameAr, syncReceptionServiceWithSecurity } from './utils/calculations.ts';
+import {
+  extractIsoDate,
+  formatDateTimeWestern,
+  getDeviceTodayIsoDate,
+  getMsUntilNextDeviceMidnight,
+  getMonthNameAr,
+  syncReceptionServiceWithSecurity,
+} from './utils/calculations.ts';
 import { evaluateDualSignatureApproval } from './utils/signatureValidation.ts';
 import {
   STAGE_ACTION_LABELS_AR,
   validateReportCompleteness,
 } from './services/ReportValidationService.ts';
+
+function applyAutoDeviceDates(
+  report: MonthlyReportFull,
+  deviceTodayIso: string = getDeviceTodayIsoDate(),
+  manualOverrides?: { preparedAt?: boolean; approvedAt?: boolean }
+): MonthlyReportFull {
+  if (
+    report.status === REPORT_STATUSES.APPROVED ||
+    report.status === REPORT_STATUSES.ARCHIVED
+  ) {
+    return report;
+  }
+  const normalizedToday = `${deviceTodayIso}T12:00:00.000Z`;
+  const shouldSyncPrepared =
+    !manualOverrides?.preparedAt && extractIsoDate(report.preparedAt) !== deviceTodayIso;
+  const shouldSyncApproved =
+    !manualOverrides?.approvedAt && extractIsoDate(report.approvedAt) !== deviceTodayIso;
+
+  if (!shouldSyncPrepared && !shouldSyncApproved) {
+    return report;
+  }
+  return {
+    ...report,
+    preparedAt: shouldSyncPrepared ? normalizedToday : report.preparedAt,
+    approvedAt: shouldSyncApproved ? normalizedToday : report.approvedAt,
+  };
+}
 
 export default function App() {
   const {
@@ -61,6 +95,12 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<AppTab>('report');
   const [loading, setLoading] = useState(true);
+  const [deviceTodayIso, setDeviceTodayIso] = useState<string>(() => getDeviceTodayIsoDate());
+  const manualDateEditsRef = useRef<{
+    reportId: string | null;
+    preparedAt: boolean;
+    approvedAt: boolean;
+  }>({ reportId: null, preparedAt: false, approvedAt: false });
   const [user, setUser] = useState<AuthUser | null>(null);
   const [sites, setSites] = useState<MaintenanceSite[]>([]);
   const [categories, setCategories] = useState<MaintenanceCategory[]>([]);
@@ -180,10 +220,12 @@ export default function App() {
     async (id: string) => {
       try {
         const res = await api.getReport(id);
-        const normalizedReport =
+        manualDateEditsRef.current = { reportId: res.report.id, preparedAt: false, approvedAt: false };
+        const syncedSecurity =
           res.report.status === REPORT_STATUSES.DRAFT
             ? syncReceptionServiceWithSecurity(res.report)
             : res.report;
+        const normalizedReport = applyAutoDeviceDates(syncedSecurity, getDeviceTodayIsoDate());
         setActiveReport(normalizedReport);
         setHistory(res.history);
         setDirty(false);
@@ -198,6 +240,54 @@ export default function App() {
     },
     [notifyError]
   );
+
+  // Keep the automatic device date synchronized across midnight rollovers, tab focus, or device clock changes
+  useEffect(() => {
+    let midnightTimer: number | null = null;
+
+    const refreshDeviceDate = () => {
+      const latestIso = getDeviceTodayIsoDate();
+      setDeviceTodayIso((prev) => (prev === latestIso ? prev : latestIso));
+    };
+
+    const scheduleMidnightTick = () => {
+      if (midnightTimer !== null) {
+        window.clearTimeout(midnightTimer);
+      }
+      midnightTimer = window.setTimeout(() => {
+        refreshDeviceDate();
+        scheduleMidnightTick();
+      }, getMsUntilNextDeviceMidnight());
+    };
+
+    scheduleMidnightTick();
+    const intervalId = window.setInterval(refreshDeviceDate, 60_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshDeviceDate();
+      }
+    };
+
+    window.addEventListener('focus', refreshDeviceDate);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      if (midnightTimer !== null) window.clearTimeout(midnightTimer);
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshDeviceDate);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  // Silently update active working report dates whenever the device calendar day changes (unless manually edited)
+  useEffect(() => {
+    setActiveReport((prev) => {
+      if (!prev) return prev;
+      const overrides =
+        manualDateEditsRef.current.reportId === prev.id ? manualDateEditsRef.current : undefined;
+      return applyAutoDeviceDates(prev, deviceTodayIso, overrides);
+    });
+  }, [deviceTodayIso]);
 
   const refreshBootstrap = useCallback(
     async (selectId?: string) => {
@@ -292,11 +382,16 @@ export default function App() {
     if (!activeReport) return false;
     setSaving(true);
     try {
+      const overrides =
+        manualDateEditsRef.current.reportId === activeReport.id
+          ? manualDateEditsRef.current
+          : undefined;
+      const reportToSave = applyAutoDeviceDates(activeReport, getDeviceTodayIsoDate(), overrides);
       const res = await api.saveReport(activeReport.id, {
-        ...activeReport,
+        ...reportToSave,
         expectedLockVersion: activeReport.lockVersion,
       });
-      setActiveReport(res.report);
+      setActiveReport(applyAutoDeviceDates(res.report, getDeviceTodayIsoDate(), overrides));
       setHistory(res.history);
       setDirty(false);
       const listRes = await api.listReports();
@@ -486,6 +581,17 @@ export default function App() {
   const handleSaveDate = async (target: 'preparedAt' | 'approvedAt', dateValue: string | null) => {
     if (!activeReport) return;
     try {
+      const todayIso = getDeviceTodayIsoDate();
+      const isManualChange = extractIsoDate(dateValue) !== todayIso;
+      if (manualDateEditsRef.current.reportId !== activeReport.id) {
+        manualDateEditsRef.current = {
+          reportId: activeReport.id,
+          preparedAt: false,
+          approvedAt: false,
+        };
+      }
+      manualDateEditsRef.current[target] = isManualChange;
+
       const res = await api.saveDate(activeReport.id, target, dateValue);
       setActiveReport((prev) => {
         if (!prev || prev.id !== res.report.id) return res.report;
@@ -557,6 +663,11 @@ export default function App() {
     const wasPostApprovalRevision = isTargetActive ? activeReport.isPostApprovalRevision : false;
 
     try {
+      const liveTodayIso = getDeviceTodayIsoDate();
+      const activeOverrides =
+        activeReport && manualDateEditsRef.current.reportId === activeReport.id
+          ? manualDateEditsRef.current
+          : undefined;
       if (
         isTargetActive &&
         activeReport &&
@@ -565,10 +676,20 @@ export default function App() {
           (action === 'approve' &&
             (activeReport.status === REPORT_STATUSES.DRAFT || user?.role === 'admin')))
       ) {
+        const reportToSave = applyAutoDeviceDates(activeReport, liveTodayIso, activeOverrides);
         await api.saveReport(activeReport.id, {
-          ...activeReport,
+          ...reportToSave,
           expectedLockVersion: activeReport.lockVersion,
         });
+      } else if (isTargetActive && activeReport && (action === 'submit_review' || action === 'approve')) {
+        try {
+          const targetField = action === 'submit_review' ? 'preparedAt' : 'approvedAt';
+          const effectiveDateIso =
+            extractIsoDate(activeReport[targetField]) || liveTodayIso;
+          await api.saveDate(activeReport.id, targetField, effectiveDateIso);
+        } catch {
+          // Non-blocking fallback: backend workflow transition still timestamps the stage
+        }
       }
       const res = await api.workflowAction(
         targetId,
@@ -579,7 +700,7 @@ export default function App() {
         action === 'create_revision' && isTargetActive ? activeReport?.currentVersion : undefined
       );
       if (isTargetActive || !activeReport) {
-        setActiveReport(res.report);
+        setActiveReport(applyAutoDeviceDates(res.report, liveTodayIso, activeOverrides));
         setDirty(false);
       }
       setHistory(res.history);
@@ -654,7 +775,7 @@ export default function App() {
         undefined,
         target.currentVersion
       );
-      setActiveReport(res.report);
+      setActiveReport(applyAutoDeviceDates(res.report, getDeviceTodayIsoDate()));
       setHistory(res.history);
       setHistoryModalReport(res.report);
       setDirty(false);
@@ -1214,7 +1335,27 @@ export default function App() {
                 saving={saving}
                 savingSignatureTarget={savingSignatureTarget}
                 onChangeReport={(updater) => {
-                  setActiveReport((prev) => (prev ? syncReceptionServiceWithSecurity(updater(prev)) : prev));
+                  setActiveReport((prev) => {
+                    if (!prev) return prev;
+                    const updated = syncReceptionServiceWithSecurity(updater(prev));
+                    const todayIso = getDeviceTodayIsoDate();
+                    if (manualDateEditsRef.current.reportId !== prev.id) {
+                      manualDateEditsRef.current = {
+                        reportId: prev.id,
+                        preparedAt: false,
+                        approvedAt: false,
+                      };
+                    }
+                    if (updated.preparedAt !== prev.preparedAt) {
+                      manualDateEditsRef.current.preparedAt =
+                        extractIsoDate(updated.preparedAt) !== todayIso;
+                    }
+                    if (updated.approvedAt !== prev.approvedAt) {
+                      manualDateEditsRef.current.approvedAt =
+                        extractIsoDate(updated.approvedAt) !== todayIso;
+                    }
+                    return updated;
+                  });
                   setDirty(true);
                 }}
                 onSave={async () => {

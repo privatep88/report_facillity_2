@@ -70,11 +70,13 @@ import {
 } from '../types/report.ts';
 import {
   computeReportMetrics,
+  extractIsoDate,
   formatAed,
   formatDateTimeWestern,
   formatNumber,
   formatPct,
   formatPercentage,
+  getDeviceTodayIsoDate,
   isLogisticsServiceRow,
 } from '../utils/calculations.ts';
 import { evaluateDualSignatureApproval } from '../utils/signatureValidation.ts';
@@ -3776,26 +3778,51 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       <label htmlFor="preparer-date-input" className="text-slate-500 font-semibold text-[11px]">
                         التاريخ
                       </label>
-                      {canSignPreparer && report.preparedAt && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (canEdit) {
-                              onChangeReport((prev) => ({ ...prev, preparedAt: null }));
-                            } else {
-                              onSaveDate('preparedAt', null);
-                            }
-                          }}
-                          className="text-[10px] font-bold text-[#C43D47] hover:underline cursor-pointer"
-                        >
-                          مسح
-                        </button>
+                      {!isApprovedOrArchived && (canEdit || canSignPreparer) && (
+                        <div className="flex items-center gap-2">
+                          {extractIsoDate(report.preparedAt) === getDeviceTodayIsoDate() ? (
+                            <span className="text-[10px] font-bold text-[#1769AA]">
+                              تلقائي · قابل للتعديل
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const todayIso = getDeviceTodayIsoDate();
+                                const normalized = `${todayIso}T12:00:00.000Z`;
+                                if (canEdit) {
+                                  onChangeReport((prev) => ({ ...prev, preparedAt: normalized }));
+                                } else if (canSignPreparer) {
+                                  onSaveDate('preparedAt', todayIso);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-[#07976E] hover:underline cursor-pointer"
+                            >
+                              تاريخ اليوم
+                            </button>
+                          )}
+                          {report.preparedAt && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (canEdit) {
+                                  onChangeReport((prev) => ({ ...prev, preparedAt: null }));
+                                } else {
+                                  onSaveDate('preparedAt', null);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-[#C43D47] hover:underline cursor-pointer"
+                            >
+                              مسح
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                     <WesternDatePicker
                       id="preparer-date-input"
                       ariaLabel="تاريخ التقديم"
-                      disabled={!canSignPreparer}
+                      disabled={isApprovedOrArchived || (!canEdit && !canSignPreparer)}
                       value={report.preparedAt}
                       onChange={(isoDate) => {
                         const normalized = isoDate ? `${isoDate}T12:00:00.000Z` : null;
@@ -4006,26 +4033,51 @@ export const MonthlyReportTab: React.FC<MonthlyReportTabProps> = ({
                       <label htmlFor="approver-date-input" className="text-slate-500 font-semibold text-[11px]">
                         التاريخ
                       </label>
-                      {canSignApprover && report.approvedAt && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (canEdit) {
-                              onChangeReport((prev) => ({ ...prev, approvedAt: null }));
-                            } else {
-                              onSaveDate('approvedAt', null);
-                            }
-                          }}
-                          className="text-[10px] font-bold text-[#C43D47] hover:underline cursor-pointer"
-                        >
-                          مسح
-                        </button>
+                      {!isApprovedOrArchived && (canEdit || canSignApprover) && (
+                        <div className="flex items-center gap-2">
+                          {extractIsoDate(report.approvedAt) === getDeviceTodayIsoDate() ? (
+                            <span className="text-[10px] font-bold text-[#1769AA]">
+                              تلقائي · قابل للتعديل
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const todayIso = getDeviceTodayIsoDate();
+                                const normalized = `${todayIso}T12:00:00.000Z`;
+                                if (canEdit) {
+                                  onChangeReport((prev) => ({ ...prev, approvedAt: normalized }));
+                                } else if (canSignApprover) {
+                                  onSaveDate('approvedAt', todayIso);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-[#07976E] hover:underline cursor-pointer"
+                            >
+                              تاريخ اليوم
+                            </button>
+                          )}
+                          {report.approvedAt && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (canEdit) {
+                                  onChangeReport((prev) => ({ ...prev, approvedAt: null }));
+                                } else {
+                                  onSaveDate('approvedAt', null);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-[#C43D47] hover:underline cursor-pointer"
+                            >
+                              مسح
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                     <WesternDatePicker
                       id="approver-date-input"
                       ariaLabel="تاريخ الاعتماد"
-                      disabled={!canSignApprover}
+                      disabled={isApprovedOrArchived || (!canEdit && !canSignApprover)}
                       value={report.approvedAt}
                       onChange={(isoDate) => {
                         const normalized = isoDate ? `${isoDate}T12:00:00.000Z` : null;

@@ -19,6 +19,7 @@ import {
 import {
   computeReportMetrics,
   formatDateWestern,
+  getDeviceTodayNormalizedTimestamp,
   syncReceptionServiceWithSecurity,
 } from '../utils/calculations.ts';
 import { validateReportCompleteness } from '../services/ReportValidationService.ts';
@@ -176,7 +177,7 @@ function createBaseReportTemplate(params: {
     preparerId: 'usr_preparer',
     preparerName: 'معاذ المصعبي',
     preparerTitle: 'ضابط أول المرافق والأصول',
-    preparedAt: formatDateWestern(now),
+    preparedAt: getDeviceTodayNormalizedTimestamp(),
     preparerSignatureHash: 'SIG-53FD737FF12A939342CBF050',
     preparerSignatureImage: null,
     preparerSignedAt: now,
@@ -190,7 +191,7 @@ function createBaseReportTemplate(params: {
     approverId: 'usr_approver',
     approverName: 'فيصل سويد السليماني',
     approverTitle: 'رئيس قسم إدارة المرافق',
-    approvedAt: '28/01/2027',
+    approvedAt: getDeviceTodayNormalizedTimestamp(),
     approverSignatureHash: null,
     approverSignatureImage: null,
     approverSignedAt: null,

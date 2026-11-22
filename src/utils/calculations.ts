@@ -187,6 +187,34 @@ export function extractIsoDate(value: string | null | undefined): string {
 }
 
 /**
+ * Returns today's actual Gregorian calendar date according to the user's device local clock
+ * in canonical YYYY-MM-DD Western numerals (immune to UTC ±1 day drift and locale overrides).
+ */
+export function getDeviceTodayIsoDate(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  return normalizeDateDigits(`${String(year).padStart(4, '0')}-${pad2(month)}-${pad2(day)}`);
+}
+
+/**
+ * Returns today's actual device date normalized as a noon-UTC ISO timestamp (`YYYY-MM-DDT12:00:00.000Z`)
+ * so date parsers and formatters across client, server, PDF, and Excel never shift by ±1 day.
+ */
+export function getDeviceTodayNormalizedTimestamp(now: Date = new Date()): string {
+  return `${getDeviceTodayIsoDate(now)}T12:00:00.000Z`;
+}
+
+/**
+ * Returns milliseconds remaining until the next local device midnight (+1.5s safety buffer)
+ * for automatic live day-rollover updates.
+ */
+export function getMsUntilNextDeviceMidnight(now: Date = new Date()): number {
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1, 500);
+  return Math.max(1000, nextMidnight.getTime() - now.getTime());
+}
+
+/**
  * Formats an ISO or YYYY-MM-DD date string strictly as DD/MM/YYYY in Western numerals (0-9),
  * anchored to Gregorian calendar and immune to browser/OS locale overrides.
  */

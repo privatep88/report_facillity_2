@@ -14,6 +14,7 @@ interface WesternDatePickerProps {
   value: string | null | undefined;
   onChange: (isoDate: string | null) => void;
   disabled?: boolean;
+  readOnly?: boolean;
   placeholder?: string;
   ariaLabel?: string;
   className?: string;
@@ -54,10 +55,12 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
   value,
   onChange,
   disabled = false,
+  readOnly = false,
   placeholder = 'DD/MM/YYYY',
   ariaLabel,
   className = '',
 }) => {
+  const isInteractive = !disabled && !readOnly;
   const committedIso = useMemo(() => extractIsoDate(value), [value]);
   const committedDisplay = useMemo(
     () => (committedIso ? formatDateWestern(committedIso, '') : ''),
@@ -163,7 +166,7 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
   }, [open, updatePopoverPosition]);
 
   const toggleOpen = () => {
-    if (disabled) return;
+    if (!isInteractive) return;
     if (!open) {
       syncViewToCurrentDate();
     }
@@ -171,7 +174,7 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
   };
 
   const handleOpenFromInput = () => {
-    if (disabled) return;
+    if (!isInteractive) return;
     if (!open) {
       syncViewToCurrentDate();
       setOpen(true);
@@ -189,7 +192,7 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (disabled) return;
+    if (!isInteractive) return;
     const raw = normalizeDateDigits(e.target.value).replace(/[^0-9/]/g, '');
     setTextValue(raw);
 
@@ -307,9 +310,11 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
         className={`flex items-center w-full rounded-md border transition-colors ${
           disabled
             ? 'border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed'
-            : open
-              ? 'border-[#1769AA] bg-white ring-2 ring-[#1769AA]/15'
-              : 'border-slate-200 bg-[#F8FAFC] hover:border-[#A3C0DE] focus-within:bg-white focus-within:border-[#1769AA]'
+            : readOnly
+              ? 'border-[#C5D8EC] bg-[#F8FAFC] text-[#0B2341]'
+              : open
+                ? 'border-[#1769AA] bg-white ring-2 ring-[#1769AA]/15'
+                : 'border-slate-200 bg-[#F8FAFC] hover:border-[#A3C0DE] focus-within:bg-white focus-within:border-[#1769AA]'
         }`}
       >
         <input
@@ -321,15 +326,17 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
           lang="en"
           autoComplete="off"
           disabled={disabled}
+          readOnly={readOnly}
           aria-label={ariaLabel}
-          aria-expanded={open}
-          aria-haspopup="dialog"
+          aria-expanded={isInteractive ? open : undefined}
+          aria-haspopup={isInteractive ? 'dialog' : undefined}
           placeholder={placeholder}
           value={textValue}
           onClick={handleOpenFromInput}
           onChange={handleInputChange}
-          onBlur={handleInputBlur}
+          onBlur={isInteractive ? handleInputBlur : undefined}
           onKeyDown={(e) => {
+            if (!isInteractive) return;
             if (e.key === 'ArrowDown') {
               e.preventDefault();
               handleOpenFromInput();
@@ -341,21 +348,32 @@ export const WesternDatePicker: React.FC<WesternDatePickerProps> = ({
               }
             }
           }}
-          className="w-full min-w-0 px-2 py-1 bg-transparent font-mono font-bold text-[#0B2341] text-[11.5px] tabular-nums western-num focus:outline-none disabled:text-slate-500 disabled:cursor-not-allowed"
+          className={`w-full min-w-0 px-2 py-1 bg-transparent font-mono font-bold text-[#0B2341] text-[11.5px] tabular-nums western-num focus:outline-none disabled:text-slate-500 disabled:cursor-not-allowed ${
+            readOnly ? 'cursor-default' : ''
+          }`}
         />
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={toggleOpen}
-          aria-label="فتح التقويم الميلادي"
-          className="px-2 py-1 text-[#1769AA] hover:text-[#012E5E] disabled:text-slate-400 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
-        >
-          <Calendar className="w-3.5 h-3.5" />
-        </button>
+        {readOnly && !disabled ? (
+          <span
+            aria-hidden="true"
+            className="px-2 py-1 text-[#1769AA] shrink-0 flex items-center"
+          >
+            <Calendar className="w-3.5 h-3.5" />
+          </span>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={toggleOpen}
+            aria-label="فتح التقويم الميلادي"
+            className="px-2 py-1 text-[#1769AA] hover:text-[#012E5E] disabled:text-slate-400 disabled:cursor-not-allowed cursor-pointer shrink-0 transition-colors"
+          >
+            <Calendar className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       {open &&
-        !disabled &&
+        isInteractive &&
         createPortal(
           <div
             ref={popoverRef}

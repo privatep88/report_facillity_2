@@ -5,7 +5,7 @@ import type {
   TaskStatus,
 } from '../types/report.ts';
 import { TASK_STATUSES } from '../types/report.ts';
-import { syncReceptionServiceWithSecurity } from './calculations.ts';
+import { getDeviceTodayNormalizedTimestamp, syncReceptionServiceWithSecurity } from './calculations.ts';
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -345,11 +345,10 @@ export function populateReportWithSampleData(
     recommendationText: ch.recommendationText,
   }));
 
-  // 10. Preparer & Approver metadata + valid dates
-  const year = report.year || 2027;
-  const month = String(report.month || 1).padStart(2, '0');
-  const preparedDateIso = report.preparedAt || `${year}-${month}-26`;
-  const approvedDateIso = report.approvedAt || `${year}-${month}-28`;
+  // 10. Preparer & Approver metadata + automatic device local date
+  const todayDeviceTimestamp = getDeviceTodayNormalizedTimestamp();
+  const preparedDateIso = todayDeviceTimestamp;
+  const approvedDateIso = todayDeviceTimestamp;
 
   const populated: MonthlyReportFull = {
     ...report,
