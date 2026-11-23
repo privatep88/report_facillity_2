@@ -5,8 +5,8 @@ import safetyLogisticsImg from '../../assets/images/facility_safety_logistics_17
 import fireExtImg from '../../assets/images/fire_extinguisher_safety_1794730113921.jpg';
 import technicianImg from '../../assets/images/technician_electrical_panel_1794730113102.jpg';
 import saaedFooterVisualPng from '../../assets/images/saaed_footer_visual_bg.png';
-import saaedHeaderVisualPng from '../../assets/images/saaed_header_visual_bg.png';
-import saaedLogoMarkPng from '../../assets/images/saaed_logo_mark.png';
+import saaedHeaderVisualPng from '../../assets/images/saher_header_visual_bg.png';
+import saaedLogoMarkPng from '../../assets/images/saher_logo_mark.png';
 import analyticsHeroImg from '../../assets/images/analytics_hero_banner_1794843950299.jpg';
 import analyticsServicesImg from '../../assets/images/analytics_services_hub_1794843952722.jpg';
 import analyticsMaintImg from '../../assets/images/analytics_maintenance_ops_1794843950412.jpg';

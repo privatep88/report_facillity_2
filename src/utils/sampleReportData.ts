@@ -352,10 +352,10 @@ export function populateReportWithSampleData(
 
   const populated: MonthlyReportFull = {
     ...report,
-    preparerName: report.preparerName?.trim() || 'معاذ المصعبي',
+    preparerName: report.preparerName?.trim() || 'سالم المنصوري',
     preparerTitle: report.preparerTitle?.trim() || 'ضابط أول المرافق والأصول',
     preparedAt: preparedDateIso,
-    approverName: report.approverName?.trim() || 'فيصل سويد السليماني',
+    approverName: report.approverName?.trim() || 'خالد أحمد الهاشمي',
     approverTitle: report.approverTitle?.trim() || 'رئيس قسم إدارة المرافق',
     approvedAt: approvedDateIso,
     services: nextServices,

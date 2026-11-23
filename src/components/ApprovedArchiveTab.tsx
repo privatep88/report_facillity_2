@@ -255,7 +255,7 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
       >
         <img
           src={approvedBannerImg}
-          alt="مستندات وتقارير تنفيذية رسمية معتمدة وختم اعتماد رمزي وأرشيف رقمي حديث لشركة ساعد"
+          alt="مستندات وتقارير تنفيذية رسمية معتمدة وختم اعتماد رمزي وأرشيف رقمي حديث لشركة ساهر"
           referrerPolicy="no-referrer"
           className="absolute inset-0 w-full h-full object-cover object-center"
         />
@@ -594,7 +594,7 @@ export const ApprovedArchiveTab: React.FC<ApprovedArchiveTabProps> = ({
             </p>
           </div>
           <span className="text-[11px] font-bold text-[#9A7422]" aria-hidden="true">
-            الأرشيف الرسمي · ساعد SAAED
+            الأرشيف الرسمي · ساهر SAHER
           </span>
         </div>
 

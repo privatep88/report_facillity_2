@@ -442,9 +442,9 @@ async function capturePagesIntoA4Pdf(params: {
   const pdfDoc = await PDFDocument.create();
   pdfDoc.setTitle(title);
   pdfDoc.setSubject(subject);
-  pdfDoc.setAuthor('SAAED Facilities Management Department');
-  pdfDoc.setCreator('SAAED Executive Reporting System');
-  pdfDoc.setProducer('SAAED Direct A4 PDF Engine');
+  pdfDoc.setAuthor('SAHER Facilities Management Department');
+  pdfDoc.setCreator('SAHER Executive Reporting System');
+  pdfDoc.setProducer('SAHER Direct A4 PDF Engine');
   pdfDoc.setCreationDate(new Date());
   pdfDoc.setModificationDate(new Date());
 
@@ -580,12 +580,12 @@ export async function exportReportDirectPdf(params: {
       pageElements,
       orientation,
       title: `${bundle.report.reportNumber} — التقرير الشهري لقسم إدارة المرافق (v${verNum})`,
-      subject: `SAAED FM Executive Report | ID:${bundle.report.id} | ${getMonthNameAr(bundle.report.month)} ${bundle.report.year}`,
+      subject: `SAHER FM Executive Report | ID:${bundle.report.id} | ${getMonthNameAr(bundle.report.month)} ${bundle.report.year}`,
       expectedReportNumber: bundle.report.reportNumber,
       expectedReportId: bundle.report.id,
     });
 
-    const fallbackName = `SAAED_FM_Report_${reportId}.pdf`;
+    const fallbackName = `SAHER_FM_Report_${reportId}.pdf`;
     const filename = sanitizeFilename(
       `${bundle.report.reportNumber}_v${verNum}.pdf`,
       fallbackName
@@ -650,13 +650,13 @@ export async function exportAnalyticsDirectPdf(params: {
     const pdfBytes = await capturePagesIntoA4Pdf({
       pageElements,
       orientation,
-      title: `SAAED_FM_Executive_Analytics — ${data.meta.scopeLabelAr}`,
-      subject: `SAAED_FM_Executive_Analytics | ${data.meta.periodLabelAr}`,
-      expectedReportNumber: 'SAAED_FM_Executive_Analytics',
+      title: `SAHER_FM_Executive_Analytics — ${data.meta.scopeLabelAr}`,
+      subject: `SAHER_FM_Executive_Analytics | ${data.meta.periodLabelAr}`,
+      expectedReportNumber: 'SAHER_FM_Executive_Analytics',
     });
 
     const stamp = new Date().toISOString().slice(0, 10);
-    const filename = `SAAED_FM_Executive_Analytics_${stamp}.pdf`;
+    const filename = `SAHER_FM_Executive_Analytics_${stamp}.pdf`;
     const blob = new Blob([pdfBytes.slice().buffer], { type: 'application/pdf' });
     triggerDirectPdfDownload(blob, filename);
 

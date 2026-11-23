@@ -129,12 +129,12 @@ export const SaaedModalFrame: React.FC<{
                 className="absolute inset-0 bg-gradient-to-t from-[#082D56] via-[#082D56]/55 to-[#082D56]/20"
               />
 
-              {/* Official Untouched SAAED Logo Badge on Visual Banner when requested */}
+              {/* Official Untouched SAHER Logo Badge on Visual Banner when requested */}
               {asset.showSaaedLogo && (
                 <div className="absolute top-2.5 right-3 bg-white/95 rounded-lg px-2 py-1 shadow-sm border border-[#D5AD5D]/70">
                   <img
                     src={OFFICIAL_SAAED_LOGO}
-                    alt="شعار شركة ساعد الرسمي"
+                    alt="شعار شركة ساهر الرسمي"
                     className="h-6 w-auto object-contain"
                   />
                 </div>

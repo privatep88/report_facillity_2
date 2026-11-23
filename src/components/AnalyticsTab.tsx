@@ -319,7 +319,7 @@ export const AnalyticsTab: React.FC = () => {
           <div className="space-y-1.5 max-w-3xl">
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-[#F0D38C]">
               <BarChart3 className="w-4 h-4 shrink-0" />
-              <span>شركة ساعد للأنظمة المرورية · إدارة الخدمات العامة · قسم إدارة المرافق</span>
+              <span>شركة ساهر للخدمات الإلكترونية · إدارة الخدمات العامة · قسم إدارة المرافق</span>
             </div>
             <h1 className="text-lg sm:text-2xl font-extrabold text-white tracking-tight">
               مركز التحليل التنفيذي لإدارة المرافق

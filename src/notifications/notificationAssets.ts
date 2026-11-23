@@ -1,6 +1,5 @@
 import type { NotificationContextKey } from './types.ts';
-import saaedLogoMark from '../assets/images/saaed_logo_mark.png';
-import headerVisualBg from '../assets/images/saaed_header_visual_bg.png';
+import { BRAND_IDENTITY } from '../config/brandIdentity.ts';
 import heroPanorama from '../assets/images/hero_facility_panorama_1794728988564.jpg';
 import engineerInspector from '../assets/images/engineer_tablet_inspector_1794730112530.jpg';
 import facilityEngineering from '../assets/images/facility_engineering_ops_1794728989361.jpg';
@@ -20,12 +19,12 @@ export interface ContextualVisualAsset {
   showSaaedLogo?: boolean;
 }
 
-export const OFFICIAL_SAAED_LOGO = saaedLogoMark;
+export const OFFICIAL_SAAED_LOGO = BRAND_IDENTITY.logoPng;
 
 const ASSET_MAP: Record<NotificationContextKey, ContextualVisualAsset> = {
   approval: {
-    src: headerVisualBg,
-    alt: 'مبنى شركة ساعد وعلم دولة الإمارات للاعتماد التنفيذي',
+    src: BRAND_IDENTITY.headerBackdropPng,
+    alt: 'مبنى شركة ساهر وعلم دولة الإمارات للاعتماد التنفيذي',
     badgeText: 'الاعتماد الرسمي والتوثيق التنفيذي',
     badgeTextEn: 'Executive Approval & Attestation',
     objectPosition: 'left center',
@@ -33,7 +32,7 @@ const ASSET_MAP: Record<NotificationContextKey, ContextualVisualAsset> = {
   },
   draft_created: {
     src: heroPanorama,
-    alt: 'مرافق شركة ساعد — إنشاء تقرير شهري جديد',
+    alt: 'مرافق شركة ساهر — إنشاء تقرير شهري جديد',
     badgeText: 'إدارة التقارير الشهرية',
     badgeTextEn: 'Monthly Reporting Workspace',
     objectPosition: 'center center',

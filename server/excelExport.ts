@@ -63,7 +63,7 @@ export async function generateMonthlyReportExcel(params: {
   const totalCols = Math.max(14, activeCategories.length + 2);
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'SAAED Facilities Management Executive System';
+  wb.creator = 'SAHER Facilities Management Executive System';
   wb.created = new Date();
   wb.modified = new Date();
 
@@ -86,7 +86,7 @@ export async function generateMonthlyReportExcel(params: {
       },
     },
     headerFooter: {
-      oddFooter: `&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد&Cتصنيف: ${report.classification}&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`,
+      oddFooter: `&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساهر&Cتصنيف: ${report.classification}&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`,
     },
   });
 
@@ -154,8 +154,8 @@ export async function generateMonthlyReportExcel(params: {
   metaCell.font = { name: 'Cairo', size: 9.5, color: { argb: 'FFE2E8F0' } };
   metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  // Embed Official SAAED Logo Mark in White Wing (Cols 1-2 in RTL = right side)
-  const logoPath = resolveBrandAsset('saaed_logo_mark.png') || path.join(process.cwd(), 'public', 'assets', 'aistudio', 'logo_1afd1154.png');
+  // Embed Official SAHER Logo Mark in White Wing (Cols 1-2 in RTL = right side)
+  const logoPath = resolveBrandAsset('saher_logo_mark.png') || resolveBrandAsset('saaed_logo_mark.png');
   if (logoPath && fs.existsSync(logoPath)) {
     const logoId = wb.addImage({
       buffer: fs.readFileSync(logoPath) as unknown as ExcelJS.Buffer,
@@ -168,7 +168,7 @@ export async function generateMonthlyReportExcel(params: {
   }
 
   // Embed Corporate Building Backdrop on left wing (Last 2 cols in RTL = left side)
-  const heroPath = resolveBrandAsset('saaed_header_visual_bg.png') || resolveBrandAsset('hero_facility_panorama');
+  const heroPath = resolveBrandAsset('saher_header_visual_bg.png') || resolveBrandAsset('saaed_header_visual_bg.png') || resolveBrandAsset('hero_facility_panorama');
   if (heroPath && fs.existsSync(heroPath)) {
     const heroId = wb.addImage({
       buffer: fs.readFileSync(heroPath) as unknown as ExcelJS.Buffer,
@@ -1499,7 +1499,7 @@ export async function generateMonthlyReportExcel(params: {
   rowIdx++;
   ws.mergeCells(rowIdx, 1, rowIdx, totalCols);
   const foot = ws.getCell(rowIdx, 1);
-  foot.value = 'قسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد للأنظمة المرورية   ·   إعداد وتصميم: خالد الهاشمي | Prepared & Designed by Khaled Al Hashemi';
+  foot.value = 'قسم إدارة المرافق | إدارة الخدمات العامة — شركة ساهر للخدمات الإلكترونية   ·   إعداد وتصميم: خالد الهاشمي | Prepared & Designed by Khaled Al Hashemi';
   foot.font = { name: 'Cairo', size: 9, bold: true, color: { argb: GOLD } };
   foot.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   foot.alignment = { horizontal: 'center', vertical: 'middle' };

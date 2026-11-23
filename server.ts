@@ -294,7 +294,7 @@ async function startServer() {
       });
 
       const stamp = new Date().toISOString().slice(0, 10);
-      const fileName = `SAAED_FM_Executive_Analytics_${stamp}.xlsx`;
+      const fileName = `SAHER_FM_Executive_Analytics_${stamp}.xlsx`;
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       res.send(xlsxBuffer);
@@ -333,7 +333,7 @@ async function startServer() {
       });
 
       const stamp = new Date().toISOString().slice(0, 10);
-      const fileName = `SAAED_FM_Executive_Analytics_${stamp}.pdf`;
+      const fileName = `SAHER_FM_Executive_Analytics_${stamp}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       res.send(pdfBuffer);
@@ -799,7 +799,7 @@ async function startServer() {
   const rawPort = Number(process.env.APP_PORT || process.env.PORT || 3000);
   const PORT = rawPort === 8080 ? 3000 : rawPort;
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`SAAED Facilities Management Executive System running on http://0.0.0.0:${PORT}`);
+    console.log(`SAHER Facilities Management Executive System running on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -205,9 +205,9 @@ export async function generateMonthlyReportPdf(params: {
     bufferPages: true,
     info: {
       Title: `التقرير الشهري لقسم إدارة المرافق - ${report.reportNumber} (${monthAr} ${report.year})`,
-      Author: report.preparerName || 'SAAED Facilities Management',
+      Author: report.preparerName || 'SAHER Facilities Management',
       Subject: `Facilities Management Monthly Executive Report - ${monthEn} ${report.year}`,
-      Creator: 'SAAED Facilities Management Executive System',
+      Creator: 'SAHER Facilities Management Executive System',
     },
   });
 

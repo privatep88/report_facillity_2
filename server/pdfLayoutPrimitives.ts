@@ -344,8 +344,8 @@ export function stampExecutiveHeaderAndFooterOnAllPages(
   doc: PDFKit.PDFDocument,
   info: PageChromeInfo
 ): void {
-  const headerBgPath = resolveAsset('saaed_header_visual_bg.png');
-  const logoMarkPath = resolveAsset('saaed_logo_mark.png');
+  const headerBgPath = resolveAsset('saher_header_visual_bg.png') || resolveAsset('saaed_header_visual_bg.png');
+  const logoMarkPath = resolveAsset('saher_logo_mark.png') || resolveAsset('saaed_logo_mark.png');
   const footerBgPath = resolveAsset('saaed_footer_visual_bg.png');
 
   const range = doc.bufferedPageRange();
@@ -387,7 +387,7 @@ export function stampExecutiveHeaderAndFooterOnAllPages(
     if (logoMarkPath) {
       doc.image(logoMarkPath, pw - 125, 7, { fit: [105, 32], align: 'center', valign: 'center' });
     }
-    drawBidiLine(doc, 'ساعد للأنظمة المرورية', pw - 140, 42, {
+    drawBidiLine(doc, 'ساهر للخدمات الإلكترونية', pw - 140, 42, {
       fontSize: 7.5,
       bold: true,
       color: PDF_COLORS.navy,
@@ -395,7 +395,7 @@ export function stampExecutiveHeaderAndFooterOnAllPages(
       dir: 'rtl',
       width: 130,
     });
-    drawBidiLine(doc, 'SAAED Traffic Systems', pw - 140, 52, {
+    drawBidiLine(doc, 'SAHER ELECTRONIC SERVICES', pw - 140, 52, {
       fontSize: 6.5,
       bold: true,
       color: '#475569',

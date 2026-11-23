@@ -70,7 +70,7 @@ const INITIAL_USERS: AuthUser[] = [
   {
     id: 'usr_preparer',
     email: 'muath.almasabi@saaed.ae',
-    fullName: 'معاذ المصعبي',
+    fullName: 'سالم المنصوري',
     jobTitle: 'ضابط أول المرافق والأصول',
     role: USER_ROLES.PREPARER,
     isActive: true,
@@ -86,7 +86,7 @@ const INITIAL_USERS: AuthUser[] = [
   {
     id: 'usr_approver',
     email: 'faisal.alsulaimani@saaed.ae',
-    fullName: 'فيصل سويد السليماني',
+    fullName: 'خالد أحمد الهاشمي',
     jobTitle: 'رئيس قسم إدارة المرافق',
     role: USER_ROLES.APPROVER,
     isActive: true,
@@ -170,26 +170,26 @@ function createBaseReportTemplate(params: {
     year,
     month,
     department,
-    company: 'ساعد للأنظمة المرورية — SAAED',
+    company: 'ساهر للخدمات الإلكترونية — SAHER',
     classification: 'Public',
     status: REPORT_STATUSES.DRAFT,
     currentVersion: 2,
     preparerId: 'usr_preparer',
-    preparerName: 'معاذ المصعبي',
+    preparerName: 'سالم المنصوري',
     preparerTitle: 'ضابط أول المرافق والأصول',
     preparedAt: getDeviceTodayNormalizedTimestamp(),
     preparerSignatureHash: 'SIG-53FD737FF12A939342CBF050',
     preparerSignatureImage: null,
     preparerSignedAt: now,
     preparerSignedById: 'usr_preparer',
-    preparerSignedByName: 'معاذ المصعبي',
+    preparerSignedByName: 'سالم المنصوري',
     preparerSignatureStatus: 'valid',
     reviewerId: 'usr_reviewer',
     reviewerName: 'سالم المنصوري',
     reviewerTitle: 'مراجع عمليات المرافق',
     reviewedAt: null,
     approverId: 'usr_approver',
-    approverName: 'فيصل سويد السليماني',
+    approverName: 'خالد أحمد الهاشمي',
     approverTitle: 'رئيس قسم إدارة المرافق',
     approvedAt: getDeviceTodayNormalizedTimestamp(),
     approverSignatureHash: null,
@@ -375,7 +375,7 @@ function createInitialStoreState(): StaticStoreState {
             fromStatus: REPORT_STATUSES.PENDING_APPROVAL,
             toStatus: REPORT_STATUSES.APPROVED,
             actorId: 'usr_approver',
-            actorName: 'فيصل سويد السليماني',
+            actorName: 'خالد أحمد الهاشمي',
             actorRole: USER_ROLES.APPROVER,
             comment: 'تمت المراجعة والاعتماد النهائي للتقرير الشهري.',
             signatureToken: 'SIG-APPROVED-20261231',
@@ -390,7 +390,7 @@ function createInitialStoreState(): StaticStoreState {
               reportId: dec2026.id,
               versionNumber: 1,
               approvedById: 'usr_approver',
-              approvedByName: 'فيصل سويد السليماني',
+              approvedByName: 'خالد أحمد الهاشمي',
               signatureToken: 'SIG-APPROVED-20261231',
               createdAt: now,
             },
@@ -450,15 +450,47 @@ function ensureImpoundYardsSiteInStore(state: StaticStoreState): boolean {
   return true;
 }
 
+function ensureIdentityNamesInStore(state: StaticStoreState): boolean {
+  let changed = false;
+  for (const report of Object.values(state.reports || {})) {
+    if (report.preparerName === 'معاذ المصعبي') {
+      report.preparerName = 'سالم المنصوري';
+      changed = true;
+    }
+    if (report.preparerSignedByName === 'معاذ المصعبي') {
+      report.preparerSignedByName = 'سالم المنصوري';
+      changed = true;
+    }
+    if (report.approverName === 'فيصل سويد السليماني') {
+      report.approverName = 'خالد أحمد الهاشمي';
+      changed = true;
+    }
+    if (report.approverSignedByName === 'فيصل سويد السليماني') {
+      report.approverSignedByName = 'خالد أحمد الهاشمي';
+      changed = true;
+    }
+    if (
+      report.company &&
+      (report.company.includes('ساهر للأنظمة المرورية') ||
+        report.company.includes('ساعد للأنظمة المرورية'))
+    ) {
+      report.company = 'ساهر للخدمات الإلكترونية — SAHER';
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function loadStore(): StaticStoreState {
   try {
     const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STATIC_STORE_KEY) : null;
     if (raw) {
       const parsed = JSON.parse(raw) as StaticStoreState;
       if (parsed && parsed.reports && Object.keys(parsed.reports).length > 0) {
-        const migrated = ensureImpoundYardsSiteInStore(parsed);
+        const migratedSites = ensureImpoundYardsSiteInStore(parsed);
+        const migratedNames = ensureIdentityNamesInStore(parsed);
         memoryStore = parsed;
-        if (migrated) saveStore(parsed);
+        if (migratedSites || migratedNames) saveStore(parsed);
         return parsed;
       }
     }
@@ -467,6 +499,7 @@ function loadStore(): StaticStoreState {
   }
   if (memoryStore && memoryStore.reports && Object.keys(memoryStore.reports).length > 0) {
     ensureImpoundYardsSiteInStore(memoryStore);
+    ensureIdentityNamesInStore(memoryStore);
     return memoryStore;
   }
   const initial = createInitialStoreState();
@@ -702,7 +735,7 @@ export const staticFallbackApi = {
       },
       createdAt: report.updatedAt,
       signatureToken: report.approverSignatureHash || report.preparerSignatureHash || 'SIG-STATIC',
-      approvedByName: report.approverName || 'فيصل سويد السليماني',
+      approvedByName: report.approverName || 'خالد أحمد الهاشمي',
     };
   },
 

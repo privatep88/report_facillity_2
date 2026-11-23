@@ -57,9 +57,9 @@ export async function generateExecutiveAnalyticsPdf(params: {
     bufferPages: true,
     info: {
       Title: `التقرير التحليلي التنفيذي لإدارة المرافق - ${bi.meta.scopeLabelAr}`,
-      Author: 'SAAED Facilities Management Executive Intelligence Center',
+      Author: 'SAHER Facilities Management Executive Intelligence Center',
       Subject: `Executive Analytics Report (${bi.meta.periodLabelAr})`,
-      Creator: 'SAAED Facilities Management Executive System',
+      Creator: 'SAHER Facilities Management Executive System',
     },
   });
 
@@ -366,7 +366,7 @@ export async function generateExecutiveAnalyticsPdf(params: {
   stampExecutiveHeaderAndFooterOnAllPages(doc, {
     titleAr: 'مركز التحليل التنفيذي لإدارة المرافق',
     titleEn: 'Facilities Management Executive Intelligence Report',
-    subtitleAr: `شركة ساعد للأنظمة المرورية · إدارة الخدمات العامة · النطاق: ${bi.meta.scopeLabelAr}`,
+    subtitleAr: `شركة ساهر للخدمات الإلكترونية · إدارة الخدمات العامة · النطاق: ${bi.meta.scopeLabelAr}`,
     metaRightAr: `النطاق: ${bi.meta.scopeLabelAr} | الفترة: ${bi.meta.periodLabelAr} | التقارير المشمولة: ${formatNumber(bi.meta.filteredReportsCount)} (${formatNumber(bi.meta.approvedInScopeCount)} معتمد / ${formatNumber(bi.meta.draftInScopeCount)} قيد الإعداد)`,
     metaLeftAr: `تاريخ الإصدار: ${generatedStamp}`,
     isDraftWatermark: filters.statusScope !== 'approved_only' && bi.meta.draftInScopeCount > 0,

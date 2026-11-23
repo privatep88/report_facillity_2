@@ -501,9 +501,9 @@ export function initSchemaAndSeed(): void {
       'INSERT INTO users (id, email, full_name, job_title, role_key, password_hash, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
     );
     insertUser.run('usr_admin', 'mr.aljefre@gmail.com', 'خالد الهاشمي', 'مدير النظام التنفيذي', USER_ROLES.ADMIN, defaultPwdHash, now);
-    insertUser.run('usr_preparer', 'muath.almasabi@saaed.ae', 'معاذ المصعبي', 'ضابط أول المرافق والأصول', USER_ROLES.PREPARER, defaultPwdHash, now);
+    insertUser.run('usr_preparer', 'muath.almasabi@saaed.ae', 'سالم المنصوري', 'ضابط أول المرافق والأصول', USER_ROLES.PREPARER, defaultPwdHash, now);
     insertUser.run('usr_reviewer', 'reviewer@saaed.ae', 'سالم المنصوري', 'مراجع عمليات المرافق', USER_ROLES.REVIEWER, defaultPwdHash, now);
-    insertUser.run('usr_approver', 'faisal.alsulaimani@saaed.ae', 'فيصل سويد السليماني', 'رئيس قسم إدارة المرافق', USER_ROLES.APPROVER, defaultPwdHash, now);
+    insertUser.run('usr_approver', 'faisal.alsulaimani@saaed.ae', 'خالد أحمد الهاشمي', 'رئيس قسم إدارة المرافق', USER_ROLES.APPROVER, defaultPwdHash, now);
     insertUser.run('usr_viewer', 'viewer@saaed.ae', 'الإدارة العليا (عرض)', 'عضو اللجنة التنفيذية', USER_ROLES.VIEWER, defaultPwdHash, now);
   }
 
@@ -614,6 +614,15 @@ export function initSchemaAndSeed(): void {
 
   // Ensure any unfilled draft report has realistic sample template data pre-populated
   populateUnfilledDraftReportsWithSampleData();
+
+  // Idempotent migration for updated company text, preparer name, and approver name on live SQLite DB
+  db.prepare(`UPDATE users SET full_name = 'سالم المنصوري' WHERE id = 'usr_preparer' AND full_name = 'معاذ المصعبي'`).run();
+  db.prepare(`UPDATE users SET full_name = 'خالد أحمد الهاشمي' WHERE id = 'usr_approver' AND full_name = 'فيصل سويد السليماني'`).run();
+  db.prepare(`UPDATE monthly_reports SET preparer_name = 'سالم المنصوري' WHERE preparer_name = 'معاذ المصعبي'`).run();
+  db.prepare(`UPDATE monthly_reports SET preparer_signed_by_name = 'سالم المنصوري' WHERE preparer_signed_by_name = 'معاذ المصعبي'`).run();
+  db.prepare(`UPDATE monthly_reports SET approver_name = 'خالد أحمد الهاشمي' WHERE approver_name = 'فيصل سويد السليماني'`).run();
+  db.prepare(`UPDATE monthly_reports SET approver_signed_by_name = 'خالد أحمد الهاشمي' WHERE approver_signed_by_name = 'فيصل سويد السليماني'`).run();
+  db.prepare(`UPDATE monthly_reports SET company = 'ساهر للخدمات الإلكترونية — SAHER' WHERE company LIKE '%للأنظمة المرورية%'`).run();
 }
 
 function populateUnfilledDraftReportsWithSampleData(): void {
@@ -684,12 +693,12 @@ function seedReferenceJan2027Report(): void {
       2027,
       1,
       dept,
-      'ساعد للأنظمة المرورية — SAAED',
+      'ساهر للخدمات الإلكترونية — SAHER',
       'Public',
       REPORT_STATUSES.DRAFT,
       1,
       'usr_preparer',
-      'معاذ المصعبي',
+      'سالم المنصوري',
       'ضابط أول المرافق والأصول',
       null,
       null,
@@ -698,7 +707,7 @@ function seedReferenceJan2027Report(): void {
       '',
       null,
       'usr_approver',
-      'فيصل سويد السليماني',
+      'خالد أحمد الهاشمي',
       'رئيس قسم إدارة المرافق',
       null,
       null,
@@ -815,7 +824,7 @@ function seedReferenceJan2027Report(): void {
       crypto.randomUUID(),
       reportId,
       'usr_preparer',
-      'معاذ المصعبي',
+      'سالم المنصوري',
       USER_ROLES.PREPARER,
       'تهيئة التقرير المرجعي',
       'monthly_reports',
@@ -1294,7 +1303,7 @@ export function createBlankMonthlyReport(params: {
       params.year,
       params.month,
       params.department,
-      'ساعد للأنظمة المرورية — SAAED',
+      'ساهر للخدمات الإلكترونية — SAHER',
       params.user.id,
       initialPreparerName,
       initialPreparerTitle,

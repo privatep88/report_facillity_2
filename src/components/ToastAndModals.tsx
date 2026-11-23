@@ -105,7 +105,7 @@ export const AuthModal: React.FC<{
       }}
       disableBackdropClose={loading}
       titleAr="المصادقة والصلاحيات المؤسسية"
-      subtitleAr="نظام ساعد لإدارة المرافق · التوقيع الإلكتروني الموثق"
+      subtitleAr="نظام ساهر لإدارة المرافق · التوقيع الإلكتروني الموثق"
       context="auth"
       accentColor="gold"
       size="md"

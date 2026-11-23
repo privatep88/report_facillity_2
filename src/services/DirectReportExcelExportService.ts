@@ -508,7 +508,7 @@ export async function exportReportDirectExcel(params: {
   ]);
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'SAAED Facilities Management Executive Reporting System';
+  wb.creator = 'SAHER Facilities Management Executive Reporting System';
   wb.lastModifiedBy = report.preparerName || 'Facilities Management';
   wb.created = new Date();
   wb.modified = new Date();
@@ -559,7 +559,7 @@ export async function exportReportDirectExcel(params: {
   setRowH(rowIdx + 1, 22);
   setRowH(rowIdx + 2, 22);
 
-  // Visual Right Wing (Cols 1..2): White brand zone + SAAED Logo
+  // Visual Right Wing (Cols 1..2): White brand zone + SAHER Logo
   for (let r = headerStartRow; r <= headerStartRow + 2; r++) {
     styleRange(ws, r, 1, 2, { fill: C_WHITE });
     styleRange(ws, r, 3, TOTAL_COLS, { fill: C_NAVY });
@@ -574,7 +574,7 @@ export async function exportReportDirectExcel(params: {
     1,
     headerStartRow + 2,
     2,
-    'ساعد للأنظمة المرورية | SAAED Traffic Systems',
+    'ساهر للخدمات الإلكترونية | SAHER ELECTRONIC SERVICES',
     {
       fill: C_WHITE,
       font: { size: 7.5, bold: true, color: { argb: C_NAVY } },
@@ -3565,7 +3565,7 @@ export async function exportReportDirectExcel(params: {
 
   // Set official print area and repeat header print footer
   ws.pageSetup.printArea = `A1:${colLetter(TOTAL_COLS)}${footRow3}`;
-  ws.headerFooter.oddFooter = `&Rإدارة الخدمات العامة | قسم إدارة المرافق — ساعد&C${report.reportNumber} (v${verNumber})&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`;
+  ws.headerFooter.oddFooter = `&Rإدارة الخدمات العامة | قسم إدارة المرافق — ساهر&C${report.reportNumber} (v${verNumber})&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي`;
 
   // ===========================================================================
   // SHEET 2: بيانات تفصيلية (Clean Flat Analytical Tables — Zero Merged Data Cells)
@@ -3705,7 +3705,7 @@ export async function exportReportDirectExcel(params: {
     });
   });
 
-  wsData.headerFooter.oddFooter = `&Rقسم إدارة المرافق — شركة ساعد&Cبيانات تفصيلية (${report.reportNumber})&Lصفحة &P من &N`;
+  wsData.headerFooter.oddFooter = `&Rقسم إدارة المرافق — شركة ساهر&Cبيانات تفصيلية (${report.reportNumber})&Lصفحة &P من &N`;
 
   // Write Buffer & Validate OOXML Zip Structure
   const rawBuffer = await wb.xlsx.writeBuffer();
@@ -3717,7 +3717,7 @@ export async function exportReportDirectExcel(params: {
   });
   const filename = sanitizeFilename(
     `${report.reportNumber}_v${verNumber}.xlsx`,
-    `SAAED_FM_Report_${reportId}.xlsx`
+    `SAHER_FM_Report_${reportId}.xlsx`
   );
   triggerXlsxDownload(blob, filename);
 
@@ -3757,7 +3757,7 @@ export async function exportAnalyticsDirectExcel(params: {
 
   const assets = await loadAnalyticsExcelVisualAssets();
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'SAAED Facilities Management Executive Intelligence Center';
+  wb.creator = 'SAHER Facilities Management Executive Intelligence Center';
   wb.created = new Date();
   wb.modified = new Date();
 
@@ -3814,7 +3814,7 @@ export async function exportAnalyticsDirectExcel(params: {
       2,
       2,
       titleEnd,
-      `SAAED Facilities Management Executive Intelligence | ${sheetTitleEn}`,
+      `SAHER Facilities Management Executive Intelligence | ${sheetTitleEn}`,
       {
         fill: C_NAVY,
         font: { size: 10, bold: true, color: { argb: C_GOLD_LIGHT } },
@@ -4130,7 +4130,7 @@ export async function exportAnalyticsDirectExcel(params: {
 
   [ws1, ws2, ws3, ws4, ws5].forEach((sheet) => {
     sheet.headerFooter.oddFooter =
-      '&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد&Cمركز التحليل التنفيذي&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي';
+      '&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساهر&Cمركز التحليل التنفيذي&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي';
   });
 
   const rawBuffer = await wb.xlsx.writeBuffer();
@@ -4142,8 +4142,8 @@ export async function exportAnalyticsDirectExcel(params: {
   });
   const stamp = new Date().toISOString().slice(0, 10);
   const filename = sanitizeFilename(
-    `SAAED_FM_Executive_Analytics_${stamp}.xlsx`,
-    'SAAED_FM_Executive_Analytics.xlsx'
+    `SAHER_FM_Executive_Analytics_${stamp}.xlsx`,
+    'SAHER_FM_Executive_Analytics.xlsx'
   );
   triggerXlsxDownload(blob, filename);
 

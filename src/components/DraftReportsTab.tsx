@@ -230,7 +230,7 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
         {/* Real Copyable HTML Typography */}
         <div className="relative z-10 w-full px-5 sm:px-7 py-4 sm:py-5 flex flex-col justify-center gap-1.5 max-w-3xl">
           <div className="flex items-center gap-2 text-[11px] font-bold text-[#E5C878]">
-            <span>شركة ساعد SAAED</span>
+            <span>شركة ساهر SAHER</span>
             <span aria-hidden="true">·</span>
             <span>التقرير الشهري لقسم إدارة المرافق</span>
           </div>
@@ -471,7 +471,7 @@ export const DraftReportsTab: React.FC<DraftReportsTabProps> = ({
             </p>
           </div>
           <span className="text-[11px] font-bold text-[#9A7422]" aria-hidden="true">
-            إدارة المرافق · ساعد SAAED
+            إدارة المرافق · ساهر SAHER
           </span>
         </div>
 

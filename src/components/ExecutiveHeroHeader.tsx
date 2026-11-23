@@ -17,6 +17,7 @@ import { NotificationCenter } from '../notifications/NotificationCenter.tsx';
 import { useNotification } from '../notifications/NotificationProvider.tsx';
 import type { NotificationNavigationTarget } from '../notifications/types.ts';
 import { SaaedExecutiveHeader } from './SaaedExecutiveHeader.tsx';
+import { BRAND_IDENTITY } from '../config/brandIdentity.ts';
 
 export type AppTab = 'report' | 'archive' | 'drafts' | 'analytics';
 
@@ -121,13 +122,13 @@ export const ExecutiveHeroHeader: React.FC<ExecutiveHeroHeaderProps> = ({
           )}
         </div>
 
-        {/* Center Title: SAAED Facilities Management Executive Reporting System */}
+        {/* Center Title: SAHER Facilities Management Executive Reporting System */}
         <div className="hidden lg:flex items-center justify-center min-w-0">
           <span
             dir="ltr"
             className="text-[11.5px] font-semibold tracking-wide text-slate-200/95 truncate"
           >
-            SAAED Facilities Management Executive Reporting System
+            {BRAND_IDENTITY.systemTitleEn}
           </span>
         </div>
 

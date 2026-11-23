@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-import headerBackdropPng from '../assets/images/saaed_header_visual_bg.png';
-import headerBackdropWebp from '../assets/images/saaed_header_visual_bg.webp';
-import saaedLogoMark from '../assets/images/saaed_logo_mark.png';
+import { BRAND_IDENTITY } from '../config/brandIdentity.ts';
 
 interface SaaedExecutiveHeaderProps {
   className?: string;
@@ -17,10 +15,10 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
       <div className="header-visual" aria-hidden="true">
         {!backdropFailed ? (
           <picture>
-            <source srcSet={headerBackdropWebp} type="image/webp" />
+            <source srcSet={BRAND_IDENTITY.headerBackdropWebp} type="image/webp" />
             <img
-              src={headerBackdropPng}
-              alt="المقر الرئيسي لشركة ساعد للأنظمة المرورية — إدارة المرافق"
+              src={BRAND_IDENTITY.headerBackdropPng}
+              alt={BRAND_IDENTITY.headerBackdropAltAr}
               className="header-backdrop-img"
               width={4796}
               height={532}
@@ -151,29 +149,32 @@ export const SaaedExecutiveHeader: React.FC<SaaedExecutiveHeaderProps> = ({ clas
           </div>
         </div>
 
-        {/* Right Zone: Official SAAED Brand Wing on the Visual Right */}
+        {/* Right Zone: Official SAHER Brand Wing on the Visual Right */}
         <div className="header-brand">
           {!logoFailed ? (
-            <img
-              src={saaedLogoMark}
-              alt="شعار ساعد — SAAED"
-              className="header-brand-logo"
-              draggable={false}
-              referrerPolicy="no-referrer"
-              onError={() => setLogoFailed(true)}
-            />
+            <picture>
+              <source srcSet={BRAND_IDENTITY.logoWebp} type="image/webp" />
+              <img
+                src={BRAND_IDENTITY.logoPng}
+                alt={BRAND_IDENTITY.logoAltAr}
+                className="header-brand-logo"
+                draggable={false}
+                referrerPolicy="no-referrer"
+                onError={() => setLogoFailed(true)}
+              />
+            </picture>
           ) : (
             <span lang="en" dir="ltr" className="header-brand-fallback-logo">
-              SAAED ساعد
+              {BRAND_IDENTITY.shortNameEn} {BRAND_IDENTITY.shortNameAr}
             </span>
           )}
 
           <span lang="ar" dir="rtl" className="header-brand-ar">
-            ساعد للأنظمة المرورية
+            {BRAND_IDENTITY.companyNameAr}
           </span>
 
           <span lang="en" dir="ltr" className="header-brand-en">
-            SAAED Traffic Systems
+            {BRAND_IDENTITY.companyNameEn}
           </span>
         </div>
       </div>

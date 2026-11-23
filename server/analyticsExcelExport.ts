@@ -48,7 +48,7 @@ export async function generateExecutiveAnalyticsExcel(params: {
   });
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'SAAED Facilities Management Executive Intelligence Center';
+  wb.creator = 'SAHER Facilities Management Executive Intelligence Center';
   wb.created = new Date();
   wb.modified = new Date();
 
@@ -94,7 +94,7 @@ export async function generateExecutiveAnalyticsExcel(params: {
 
     ws.mergeCells(2, 2, 2, totalCols);
     const sCell = ws.getCell(2, 2);
-    sCell.value = `SAAED Facilities Management Executive Intelligence | ${sheetTitleEn}`;
+    sCell.value = `SAHER Facilities Management Executive Intelligence | ${sheetTitleEn}`;
     sCell.font = { name: 'Cairo', size: 10, bold: true, color: { argb: GOLD } };
     sCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
@@ -106,8 +106,8 @@ export async function generateExecutiveAnalyticsExcel(params: {
     mCell.font = { name: 'Cairo', size: 9, color: { argb: 'FFE2E8F0' } };
     mCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const logoPath = path.join(process.cwd(), 'public', 'assets', 'aistudio', 'logo_1afd1154.png');
-    if (fs.existsSync(logoPath)) {
+    const logoPath = findImagePath('saher_logo_mark') || findImagePath('saaed_logo_mark');
+    if (logoPath && fs.existsSync(logoPath)) {
       const logoId = wb.addImage({
         buffer: fs.readFileSync(logoPath) as unknown as ExcelJS.Buffer,
         extension: 'png',
@@ -116,18 +116,6 @@ export async function generateExecutiveAnalyticsExcel(params: {
         tl: { col: 0.1, row: 0.15 },
         ext: { width: 120, height: 52 },
       });
-    } else {
-      const altLogo = findImagePath('saaed_logo_mark');
-      if (altLogo && fs.existsSync(altLogo)) {
-        const logoId = wb.addImage({
-          buffer: fs.readFileSync(altLogo) as unknown as ExcelJS.Buffer,
-          extension: 'png',
-        });
-        ws.addImage(logoId, {
-          tl: { col: 0.1, row: 0.15 },
-          ext: { width: 120, height: 52 },
-        });
-      }
     }
   };
 
@@ -603,7 +591,7 @@ export async function generateExecutiveAnalyticsExcel(params: {
   [ws1, ws2, ws3, ws4, ws5].forEach((sheet) => {
     sheet.pageSetup.showGridLines = false;
     sheet.headerFooter.oddFooter =
-      '&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساعد&Cمركز التحليل التنفيذي&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي';
+      '&Rقسم إدارة المرافق | إدارة الخدمات العامة — شركة ساهر&Cمركز التحليل التنفيذي&Lصفحة &P من &N | إعداد وتصميم: خالد الهاشمي';
   });
 
   const buffer = await wb.xlsx.writeBuffer();
